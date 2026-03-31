@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>09 — Positional Embeddings · LLM Notes</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .tok { display:inline-flex; align-items:center; justify-content:center; width:52px; height:36px; border-radius:6px; font-size:13px; font-weight:500; border:1.5px solid; }
+  .tok-row { display:flex; gap:5px; flex-wrap:wrap; margin:6px 0; }
+  .acell { width:30px; height:30px; border-radius:4px; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:500; }
+  .attn-grid { display:inline-grid; gap:2px; }
+
+  .dim-row { display:flex; align-items:center; gap:4px; margin-bottom:3px; }
+  .dim-label { font-size:10px; font-family:var(--mono); color:var(--muted); width:34px; text-align:right; flex-shrink:0; }
+  .wave-cell { height:13px; border-radius:2px; flex:1; }
+  .pos-label { font-size:10px; font-family:var(--mono); color:var(--muted); text-align:center; flex:1; }
+  .wave-mini { height:44px; background:var(--bg2); border-radius:6px; border:0.5px solid var(--border); position:relative; overflow:hidden; margin:3px 0; }
+
+  .rope-stat { font-size:12px; font-family:var(--mono); background:var(--bg2); border:0.5px solid var(--border); border-radius:5px; padding:4px 10px; color:var(--muted); margin:3px 0; display:block; }
+  .rope-stat b { color:var(--text); font-weight:500; }
+
+  .ctrl-row { display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap; }
+  .ctrl-row label { font-size:12px; color:var(--muted); white-space:nowrap; }
+  .ctrl-row output { font-family:var(--mono); font-size:13px; font-weight:500; min-width:20px; color:var(--text); }
+
+  table.cmp { width:100%; border-collapse:collapse; font-size:13px; margin:12px 0; }
+  table.cmp th { text-align:left; font-weight:500; color:var(--muted); font-size:11px; letter-spacing:.05em; text-transform:uppercase; padding:6px 10px; border-bottom:1px solid var(--border); }
+  table.cmp td { padding:8px 10px; border-bottom:0.5px solid var(--border); color:var(--text); vertical-align:top; font-size:12px; }
+  table.cmp td:first-child { color:var(--muted); font-weight:500; white-space:nowrap; }
+  table.cmp tr:last-child td { border-bottom:none; }
+  table.cmp .hi { color:var(--accent2); font-weight:500; }
+</style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <nav class="nav">
+    <a class="nav-home" href="index.html">← LLM Notes</a>
+    <span class="nav-title">09 / Positional embeddings</span>
+  </nav>
+
+  <div class="page-header">
+    <div class="tag">Architecture</div>
+    <h1>Positional embeddings</h1>
+    <p class="subtitle">Sinusoidal · Absolute learned · Relative · RoPE — why position matters and how each method works</p>
+  </div>
+
+  <h2>Why position is needed at all</h2>
+  <p>Attention computes dot products between Q and K vectors derived from token embeddings. Those embeddings encode <em>meaning</em> — "cat" always produces the same vector regardless of where it appears in the sentence. So the dot products are completely blind to order. "The cat sat" and "sat cat The" produce identical attention patterns. For language this is catastrophic — "dog bites man" and "man bites dog" must mean different things. Position information must be injected from outside.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">The problem — attention is permutation-invariant</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Shuffle the tokens — the per-token attention patterns are identical regardless of order, because Q and K only encode meaning, not position.</div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;">
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:5px;">Original</div>
+        <div class="tok-row" id="orig-toks"></div>
+        <div style="font-size:11px;color:var(--muted);margin:8px 0 4px;">Attention weights</div>
+        <div class="attn-grid" id="orig-attn" style="grid-template-columns:repeat(5,30px);"></div>
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:5px;">Shuffled</div>
+        <div class="tok-row" id="shuf-toks"></div>
+        <div style="font-size:11px;color:var(--muted);margin:8px 0 4px;">Attention weights</div>
+        <div class="attn-grid" id="shuf-attn" style="grid-template-columns:repeat(5,30px);"></div>
+      </div>
+    </div>
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center;">
+      <button onclick="doShuffle()" style="font-size:12px;padding:5px 14px;">↺ Shuffle</button>
+      <span style="font-size:12px;color:var(--muted);">Token content changes — but the model can't tell what order they're in without position info.</span>
+    </div>
+  </div>
+
+  <h2>1 — Sinusoidal embeddings (original transformer, 2017)</h2>
+  <p>The simplest approach: create a unique D-dimensional vector for every position using sine and cosine waves, then add it to the token embedding before anything else:</p>
+
+  <pre><code>PE(pos, dim) = sin(pos / 10000^(dim/D))   # even dimensions
+             = cos(pos / 10000^(dim/D))   # odd dimensions</code></pre>
+
+  <p>Think of it like a clock with many hands. Dimension 0–1 is a seconds hand — it completes a full cycle very quickly and distinguishes adjacent positions. Dimension 30–31 is an hour hand — it moves slowly and distinguishes distant positions. Together all D/2 hands produce a unique fingerprint for every position up to ~10,000 tokens. No parameters to learn — pure math.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">Sinusoidal position matrix — each row is one token's position vector</div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;">
+      <div style="flex:1;min-width:240px;">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">Heatmap (blue = positive, red = negative) — rows = positions, columns = dimensions</div>
+        <div id="heat-grid"></div>
+        <div style="display:flex;gap:0;padding:2px 0 0 38px;" id="pos-labels"></div>
+      </div>
+      <div style="flex:1;min-width:200px;">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">Wave frequency per dimension pair</div>
+        <div id="wave-plots"></div>
+      </div>
+    </div>
+    <div style="margin-top:10px;background:var(--bg2);border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--muted);border:0.5px solid var(--border);line-height:1.65;">
+      <strong style="color:var(--text);">Properties:</strong> no learned parameters · positions far apart have dissimilar vectors · theoretically works for any length · weakness: doesn't extrapolate well beyond training length in practice.
+    </div>
+  </div>
+
+  <h2>2 — Absolute learned embeddings (GPT-2, GPT-3)</h2>
+  <p>Instead of a fixed formula, make the position vectors learned parameters — a table of size [T_max, D] trained by gradient descent:</p>
+
+  <pre><code>x = token_embedding[token_id] + position_embedding[pos]
+# position_embedding is a [T_max, D] weight matrix
+# learned just like any other parameter</code></pre>
+
+  <p>Simpler to implement, and the model learns whatever position representation is most useful for its data. The weakness is sharp: positions beyond T_max were never seen during training, so the model completely breaks at those lengths. Also uses T_max × D extra parameters. GPT-2 used T_max = 1024; GPT-3 used 2048.</p>
+
+  <div class="card-accent">
+    <strong>Absolute vs relative:</strong> both sinusoidal and learned absolute embeddings tell the model "you are at position 5." What attention really cares about is "this token is 3 steps left of that one." Relative and RoPE methods encode distance directly, which generalises better.
+  </div>
+
+  <h2>3 — Relative position embeddings (T5, ALiBi)</h2>
+  <p>The core insight: what attention cares about is not "I am at position 5" but "this token is 3 steps away from that one." Relative embeddings modify the attention score directly. Instead of:</p>
+
+  <pre><code>score(i, j) = Qᵢ · Kⱼ                     # plain attention</code></pre>
+
+  <p>You add a bias that depends on the distance between positions:</p>
+
+  <pre><code>score(i, j) = Qᵢ · Kⱼ + bias(i − j)      # relative attention
+
+# T5 style: bias is a learned scalar per distance bucket
+# ALiBi style: bias = −|i−j| × slope  (no learned params)
+#              slope is fixed per attention head</code></pre>
+
+  <p>The model learns "tokens 3 apart should attend this much" independently of their absolute positions. This generalises better across lengths. ALiBi (Attention with Linear Biases) uses a fixed linear penalty — no extra parameters at all — and was shown to extrapolate to sequences much longer than those seen in training.</p>
+
+  <h2>4 — RoPE: Rotary Position Embeddings (LLaMA, Mistral, Gemma)</h2>
+  <p>RoPE is the most elegant solution. Instead of adding position information to embeddings, it <em>rotates</em> the Q and K vectors by an angle proportional to the position, inside the attention computation. For each consecutive pair of dimensions:</p>
+
+  <pre><code>rotate(v, pos, i) = [v₀·cos(pos·θᵢ) − v₁·sin(pos·θᵢ),
+                     v₀·sin(pos·θᵢ) + v₁·cos(pos·θᵢ)]
+
+where θᵢ = 10000^(−2i/D)   # same frequencies as sinusoidal</code></pre>
+
+  <p>Q gets rotated by m×θ (its position). K gets rotated by n×θ (its position). Then the dot product is computed normally. The magic: the dot product of two rotated vectors depends only on the <em>difference</em> (m−n), not the absolute positions — a mathematical property of how rotations compose.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">RoPE — drag positions and watch the relative distance drive the dot product</div>
+    <div class="ctrl-row">
+      <label>Query position (m):</label>
+      <input type="range" min="0" max="15" step="1" value="0" id="qpos" oninput="drawRope()" style="width:100px;">
+      <output id="qpos-out">0</output>
+      <label style="margin-left:8px;">Key position (n):</label>
+      <input type="range" min="0" max="15" step="1" value="3" id="kpos" oninput="drawRope()" style="width:100px;">
+      <output id="kpos-out">3</output>
+    </div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;">
+      <div style="flex-shrink:0;">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">2D view — one dimension pair. Each position rotates the vector by pos×θ.</div>
+        <canvas id="rope-canvas" width="220" height="220" style="border-radius:8px;background:var(--bg2);border:0.5px solid var(--border);display:block;"></canvas>
+      </div>
+      <div style="flex:1;min-width:200px;">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px;">What RoPE computes</div>
+        <span class="rope-stat">Query angle: <b id="qa">0°</b></span>
+        <span class="rope-stat">Key angle: <b id="ka">0°</b></span>
+        <span class="rope-stat">Angle difference: <b id="diff">0°</b></span>
+        <span class="rope-stat">Q·K dot product: <b id="dotval">—</b></span>
+        <span class="rope-stat">Relative distance: <b id="reldist">n − m = 0</b></span>
+        <div style="margin-top:10px;font-size:11px;color:var(--muted);margin-bottom:4px;">Dot product vs relative distance (n−m) — shape never changes, only shifts</div>
+        <canvas id="rel-canvas" width="200" height="80" style="border-radius:6px;background:var(--bg2);border:0.5px solid var(--border);display:block;width:100%;"></canvas>
+        <div style="margin-top:8px;font-family:var(--mono);font-size:12px;background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--radius);padding:10px 12px;line-height:1.85;white-space:pre;color:var(--text);overflow-x:auto;">R(m)·q  ·  R(n)·k  =  q · R(n−m)·k
+<span style="color:var(--muted);"># dot product depends ONLY on (n−m)
+# not on absolute m or n — RoPE magic</span></div>
+      </div>
+    </div>
+    <div style="margin-top:10px;background:var(--bg2);border:0.5px solid var(--border);border-left:3px solid var(--accent2);border-radius:0 var(--radius) var(--radius) 0;padding:10px 14px;font-size:12px;color:var(--muted);line-height:1.65;" id="rope-insight"></div>
+  </div>
+
+  <h2>Comparison</h2>
+  <table class="cmp">
+    <thead><tr><th></th><th>Sinusoidal</th><th>Learned absolute</th><th>Relative (T5/ALiBi)</th><th>RoPE</th></tr></thead>
+    <tbody>
+      <tr><td>Parameters</td><td>None</td><td>T_max × D</td><td>N_buckets × D or none (ALiBi)</td><td class="hi">None</td></tr>
+      <tr><td>Where applied</td><td>Added to input</td><td>Added to input</td><td>Bias inside attention scores</td><td class="hi">Rotation of Q and K</td></tr>
+      <tr><td>Encodes</td><td>Absolute position</td><td>Absolute position</td><td>Relative distance</td><td class="hi">Relative distance (mathematically)</td></tr>
+      <tr><td>Extrapolates?</td><td>Somewhat</td><td>No — breaks at T_max</td><td>Yes</td><td class="hi">Yes (with scaling tricks)</td></tr>
+      <tr><td>Used by</td><td>Original transformer</td><td>GPT-2, GPT-3</td><td>T5, BLOOM, ALiBi models</td><td class="hi">LLaMA 1/2/3, Mistral, Gemma, Falcon</td></tr>
+    </tbody>
+  </table>
+
+  <dl class="key-concept">
+    <dt>Permutation-invariant</dt><dd>Attention produces the same output regardless of token order — it sees a set, not a sequence. Position embeddings fix this.</dd>
+    <dt>Absolute position</dt><dd>Encodes "I am at position 5." Works within training length, fails beyond it.</dd>
+    <dt>Relative position</dt><dd>Encodes "I am 3 steps away from that token." Generalises to any length.</dd>
+    <dt>RoPE</dt><dd>Encodes position as a rotation of Q and K vectors. The dot product Q·K naturally depends only on relative distance due to how rotations compose.</dd>
+    <dt>YaRN / RoPE scaling</dt><dd>Techniques to stretch RoPE's frequency range so a model trained at 4K context can be used at 32K+ context without retraining.</dd>
+    <dt>ALiBi</dt><dd>Attention with Linear Biases — adds a fixed linear penalty (−|i−j| × slope) to attention scores. No position parameters at all, generalises to longer sequences.</dd>
+  </dl>
+
+</div>
+
+<script>
+const WORDS=['The','cat','sat','on','mat'];
+const TCOLORS=['#185FA5','#0F6E56','#BA7517','#7F77DD','#993C1D'];
+const dark=window.matchMedia('(prefers-color-scheme:dark)').matches;
+
+function fakeAttn(order){
+  const n=order.length,M=[];
+  for(let i=0;i<n;i++){
+    const row=[];
+    for(let j=0;j<n;j++){
+      const dist=Math.abs(order[i]-order[j]);
+      row.push(Math.exp(-dist*0.6)*(0.7+Math.random()*0.3));
+    }
+    const s=row.reduce((a,b)=>a+b,0);
+    M.push(row.map(v=>v/s));
+  }
+  return M;
+}
+
+function renderToks(id,words,order){
+  document.getElementById(id).innerHTML=words.map((w,i)=>
+    `<div class="tok" style="border-color:${TCOLORS[order[i]]}66;color:${TCOLORS[order[i]]};background:${TCOLORS[order[i]]}12;">${w}</div>`
+  ).join('');
+}
+
+function renderAttn(id,M){
+  document.getElementById(id).innerHTML=M.map(row=>row.map(v=>{
+    const a=Math.round(v*220).toString(16).padStart(2,'0');
+    return `<div class="acell" style="background:#378ADD${a};color:${v>0.4?'#fff':'var(--muted)'};">${(v*100).toFixed(0)}</div>`;
+  }).join('')).join('');
+}
+
+const origOrder=[0,1,2,3,4];
+const origAttn=fakeAttn(origOrder);
+renderToks('orig-toks',WORDS,origOrder);
+renderAttn('orig-attn',origAttn);
+
+function doShuffle(){
+  const shuf=[...origOrder].sort(()=>Math.random()-.5);
+  renderToks('shuf-toks',shuf.map(i=>WORDS[i]),shuf);
+  renderAttn('shuf-attn',fakeAttn(origOrder));
+}
+doShuffle();
+window.doShuffle=doShuffle;
+
+const NPOS=16,NDIM=32;
+function pe(pos,dim){
+  const i=Math.floor(dim/2),freq=Math.pow(10000,2*i/NDIM);
+  return dim%2===0?Math.sin(pos/freq):Math.cos(pos/freq);
+}
+function valColor(v){
+  if(dark){
+    return v>0
+      ?`rgb(${12+Math.round(v*40)},${Math.round(v*80)+34},${Math.round(v*120)+68})`
+      :`rgb(${Math.round(Math.abs(v)*100)+30},19,19)`;
+  }
+  return v>0
+    ?`rgb(${Math.round((1-v)*220)},${Math.round((1-v)*220+v*255)},255)`
+    :`rgb(255,${Math.round((1-Math.abs(v))*220)},${Math.round((1-Math.abs(v))*220)})`;
+}
+
+const hg=document.getElementById('heat-grid');
+for(let d=0;d<NDIM;d+=2){
+  const row=document.createElement('div');row.className='dim-row';
+  const lbl=document.createElement('div');lbl.className='dim-label';lbl.textContent=`d${d}`;
+  row.appendChild(lbl);
+  for(let p=0;p<NPOS;p++){
+    const cell=document.createElement('div');cell.className='wave-cell';
+    cell.style.background=valColor(pe(p,d));
+    cell.title=`pos=${p},dim=${d}: ${pe(p,d).toFixed(3)}`;
+    row.appendChild(cell);
+  }
+  hg.appendChild(row);
+}
+const pl=document.getElementById('pos-labels');
+for(let p=0;p<NPOS;p++){
+  const l=document.createElement('div');l.className='pos-label';l.textContent=p;pl.appendChild(l);
+}
+
+const wp=document.getElementById('wave-plots');
+[[0,'fast — adjacent positions'],[8,'medium'],[28,'slow — distant positions']].forEach(([d,lbl])=>{
+  const wrap=document.createElement('div');
+  wrap.innerHTML=`<div style="font-size:10px;color:var(--muted);margin-bottom:2px;">dim ${d}: ${lbl}</div>`;
+  const mini=document.createElement('div');mini.className='wave-mini';
+  const cv=document.createElement('canvas');cv.width=300;cv.height=44;
+  cv.style.cssText='width:100%;height:44px;';mini.appendChild(cv);wrap.appendChild(mini);wp.appendChild(wrap);
+  const ctx=cv.getContext('2d');
+  ctx.strokeStyle=dark?'#378ADD':'#185FA5';ctx.lineWidth=2;ctx.beginPath();
+  for(let px=0;px<300;px++){
+    const pos=px/300*64,v=pe(pos,d),y=22-v*19;
+    px===0?ctx.moveTo(px,y):ctx.lineTo(px,y);
+  }
+  ctx.stroke();
+  ctx.strokeStyle=dark?'rgba(255,255,255,0.1)':'rgba(0,0,0,0.1)';ctx.lineWidth=0.5;
+  ctx.beginPath();ctx.moveTo(0,22);ctx.lineTo(300,22);ctx.stroke();
+});
+
+const QV=[0.8,0.5],KV=[0.6,0.7],THETA=Math.PI/8;
+function rotate(v,a){return[v[0]*Math.cos(a)-v[1]*Math.sin(a),v[0]*Math.sin(a)+v[1]*Math.cos(a)];}
+function dot(a,b){return a[0]*b[0]+a[1]*b[1];}
+function deg(r){return(r*180/Math.PI).toFixed(1);}
+
+function drawRope(){
+  const m=parseInt(document.getElementById('qpos').value);
+  const n=parseInt(document.getElementById('kpos').value);
+  document.getElementById('qpos-out').textContent=m;
+  document.getElementById('kpos-out').textContent=n;
+  const qa=m*THETA,ka=n*THETA;
+  const rq=rotate(QV,qa),rk=rotate(KV,ka);
+  const d=dot(rq,rk);
+  document.getElementById('qa').textContent=deg(qa)+'°';
+  document.getElementById('ka').textContent=deg(ka)+'°';
+  document.getElementById('diff').textContent=deg((n-m)*THETA)+'°';
+  document.getElementById('dotval').textContent=d.toFixed(4);
+  document.getElementById('reldist').textContent=`n − m = ${n-m}`;
+
+  const cv=document.getElementById('rope-canvas');
+  const ctx=cv.getContext('2d');
+  const W=220,H=220,CX=110,CY=110,SC=82;
+  ctx.clearRect(0,0,W,H);
+  const gc=dark?'rgba(255,255,255,0.07)':'rgba(0,0,0,0.07)';
+  const ac=dark?'rgba(255,255,255,0.2)':'rgba(0,0,0,0.2)';
+  ctx.strokeStyle=gc;ctx.lineWidth=0.5;
+  ctx.beginPath();ctx.arc(CX,CY,SC,0,Math.PI*2);ctx.stroke();
+  ctx.strokeStyle=ac;ctx.lineWidth=0.8;
+  ctx.beginPath();ctx.moveTo(CX-SC-8,CY);ctx.lineTo(CX+SC+8,CY);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(CX,CY-SC-8);ctx.lineTo(CX,CY+SC+8);ctx.stroke();
+
+  function drawVec(v,color,lbl,ghost){
+    const ex=CX+v[0]*SC,ey=CY-v[1]*SC;
+    ctx.strokeStyle=color;ctx.lineWidth=ghost?1:2.5;ctx.globalAlpha=ghost?0.18:1;
+    ctx.beginPath();ctx.moveTo(CX,CY);ctx.lineTo(ex,ey);ctx.stroke();
+    if(!ghost){ctx.fillStyle=color;ctx.beginPath();ctx.arc(ex,ey,4,0,Math.PI*2);ctx.fill();}
+    ctx.globalAlpha=1;
+    if(lbl&&!ghost){ctx.font='11px monospace';ctx.fillStyle=color;ctx.fillText(lbl,ex+6,ey-4);}
+  }
+
+  drawVec(rotate(QV,0),'#378ADD','',true);
+  drawVec(rotate(KV,0),'#0F6E56','',true);
+  drawVec(rq,'#378ADD',`Q pos${m}`);
+  drawVec(rk,'#0F6E56',`K pos${n}`);
+
+  ctx.setLineDash([3,3]);
+  ctx.strokeStyle='#378ADD';ctx.lineWidth=1;ctx.globalAlpha=0.5;
+  ctx.beginPath();ctx.arc(CX,CY,28,0,-qa,true);ctx.stroke();
+  ctx.strokeStyle='#0F6E56';
+  ctx.beginPath();ctx.arc(CX,CY,36,0,-ka,true);ctx.stroke();
+  ctx.setLineDash([]);ctx.globalAlpha=1;
+
+  const rc=document.getElementById('rel-canvas');
+  const rctx=rc.getContext('2d');
+  const RW=rc.width,RH=80;rctx.clearRect(0,0,RW,RH);
+  const pts=[];
+  for(let rel=-8;rel<=8;rel++){
+    pts.push({rel,v:dot(rotate(QV,0),rotate(KV,rel*THETA))});
+  }
+  const maxV=Math.max(...pts.map(p=>Math.abs(p.v)),0.1);
+  const MID=RH/2;
+  rctx.strokeStyle=dark?'rgba(255,255,255,0.1)':'rgba(0,0,0,0.1)';rctx.lineWidth=0.5;
+  rctx.beginPath();rctx.moveTo(0,MID);rctx.lineTo(RW,MID);rctx.stroke();
+  rctx.strokeStyle='#378ADD';rctx.lineWidth=2;rctx.beginPath();
+  pts.forEach((p,i)=>{
+    const x=i/(pts.length-1)*RW,y=MID-p.v/maxV*(MID-8);
+    i===0?rctx.moveTo(x,y):rctx.lineTo(x,y);
+  });
+  rctx.stroke();
+  const ci=pts.findIndex(p=>p.rel===(n-m));
+  if(ci>=0){
+    const x=ci/(pts.length-1)*RW,y=MID-pts[ci].v/maxV*(MID-8);
+    rctx.fillStyle='#EF9F27';rctx.beginPath();rctx.arc(x,y,5,0,Math.PI*2);rctx.fill();
+  }
+  rctx.font='9px monospace';rctx.fillStyle=dark?'rgba(255,255,255,0.3)':'rgba(0,0,0,0.3)';
+  rctx.fillText('-8',2,RH-3);rctx.fillText('0',RW/2-4,RH-3);rctx.fillText('+8',RW-20,RH-3);
+
+  document.getElementById('rope-insight').innerHTML=
+    `<strong>RoPE magic:</strong> when Q is rotated by m×θ and K by n×θ, their dot product depends only on the difference (n−m), not the absolute positions. "Token at position 0 attending to token at position 3" produces the exact same attention score as "token at position 50 attending to token at position 53." The model naturally works in relative-position space — with no extra parameters.`;
+}
+drawRope();
+window.drawRope=drawRope;
+</script>
+</body>
+</html>
