@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>06 — Pre & Post Norm · LLM Notes</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .bar-wrap { display:flex; align-items:flex-end; gap:3px; height:100px; padding:4px 0; }
+  .bar { flex:1; border-radius:3px 3px 0 0; min-width:8px; transition:height .4s, background .3s; }
+  .zero-line { width:100%; height:1px; background:var(--border); margin-top:2px; }
+  .stat-row { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  .stat { font-size:11px; font-family:var(--mono); background:var(--bg3); border:0.5px solid var(--border); border-radius:4px; padding:3px 8px; color:var(--muted); }
+  .stat b { color:var(--text); font-weight:500; }
+  .panels { display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap; }
+  .panel { flex:1; min-width:130px; }
+  .panel-lbl { font-size:12px; color:var(--muted); margin-bottom:8px; font-weight:500; }
+
+  .arch-panels { display:flex; gap:20px; flex-wrap:wrap; }
+  .arch-col { flex:1; min-width:200px; }
+  .arch-title { font-size:13px; font-weight:500; margin-bottom:10px; padding-bottom:6px; border-bottom:0.5px solid var(--border); }
+  .blk { border-radius:6px; padding:7px 10px; text-align:center; font-size:12px; font-weight:500; border:1.5px solid; margin:0 auto; width:148px; }
+  .conn2 { width:2px; height:16px; margin:0 auto; background:var(--border); }
+  .conn2-sm { width:2px; height:9px; margin:0 auto; background:var(--border); opacity:.5; }
+  .add-c { width:22px; height:22px; border-radius:50%; border:1.5px solid var(--border); display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:500; margin:0 auto; color:var(--muted); background:var(--bg2); }
+  .res-side { position:absolute; left:18px; top:0; bottom:0; width:1.5px; background:var(--border); }
+  .res-arrow { position:absolute; left:11px; font-size:14px; color:var(--muted); }
+  .fml-box { background:var(--bg3); border:0.5px solid var(--border); border-radius:var(--radius); padding:10px 14px; font-family:var(--mono); font-size:12px; color:var(--text); line-height:1.85; margin-top:10px; }
+  .io-lbl { font-size:10px; font-family:var(--mono); color:var(--muted); text-align:center; margin:3px 0; }
+
+  .gf-wrap { display:flex; gap:20px; flex-wrap:wrap; }
+  .gf-col { flex:1; min-width:180px; }
+  .gf-title { font-size:12px; font-weight:500; margin-bottom:8px; }
+  .layer-row { border-radius:4px; padding:4px 8px; margin-bottom:2px; font-size:11px; font-family:var(--mono); display:flex; justify-content:space-between; align-items:center; background:var(--bg3); border:0.5px solid var(--border); }
+  .grad-bg { width:70px; height:7px; background:var(--bg2); border-radius:3px; overflow:hidden; }
+  .grad-fill { height:100%; border-radius:3px; transition:width .3s; }
+
+  .insight-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px; }
+  @media(max-width:520px){ .insight-grid { grid-template-columns:1fr; } }
+  .icell { background:var(--bg2); border:0.5px solid var(--border); border-radius:0 var(--radius) var(--radius) 0; padding:10px 14px; font-size:12px; color:var(--muted); line-height:1.65; }
+  .icell strong { display:block; font-size:12px; font-weight:500; margin-bottom:3px; }
+
+  .ctrl-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
+  .ctrl-row label { font-size:12px; color:var(--muted); }
+  .ctrl-row output { font-family:var(--mono); font-size:12px; font-weight:500; color:var(--text); min-width:30px; }
+
+  table.summary { width:100%; border-collapse:collapse; font-size:13px; margin:12px 0; }
+  table.summary th { text-align:left; font-weight:500; color:var(--muted); font-size:11px; letter-spacing:.05em; text-transform:uppercase; padding:6px 10px; border-bottom:1px solid var(--border); }
+  table.summary td { padding:8px 10px; border-bottom:0.5px solid var(--border); color:var(--text); vertical-align:top; }
+  table.summary td:first-child { color:var(--muted); font-weight:500; font-size:12px; white-space:nowrap; }
+  table.summary tr:last-child td { border-bottom:none; }
+</style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <nav class="nav">
+    <a class="nav-home" href="index.html">← LLM Notes</a>
+    <span class="nav-title">06 / Pre-norm & post-norm</span>
+  </nav>
+
+  <div class="page-header">
+    <div class="tag">Architecture</div>
+    <h1>Pre-norm & post-norm</h1>
+    <p class="subtitle">What normalization is · LayerNorm vs BatchNorm · why placement matters · gradient flow · RMSNorm</p>
+  </div>
+
+  <h2>What is normalization?</h2>
+  <p>During a forward pass, the numbers flowing through the network (activations) can drift into bad ranges — exploding to huge values, collapsing to near-zero, or accumulating a large mean offset. Any of these makes training unstable or slow. Normalization is a forced housekeeping step: rescale every vector so it has mean ≈ 0 and standard deviation ≈ 1 before passing it to the next sub-layer.</p>
+
+  <p>The formula for LayerNorm applied to a single vector x of length D:</p>
+
+  <pre><code>μ = mean(x)                     # scalar mean over D dimensions
+σ = std(x)                      # scalar std  over D dimensions
+x̂ = (x − μ) / (σ + ε)          # ε ≈ 1e-5 avoids div-by-zero
+
+output = γ · x̂ + β             # γ, β learned per-dimension</code></pre>
+
+  <p>The learned γ (scale) and β (shift) are critical — without them you'd permanently force every vector into the same shape, destroying the network's expressiveness. With them the network can learn "I want dimension 42 to live around mean 3, std 0.5" — but the default at init is normalized (γ=1, β=0), and it only deviates when gradients push it to.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">LayerNorm in action — try all four modes</div>
+
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;" id="mode-btns"></div>
+
+    <div class="panels">
+      <div class="panel">
+        <div class="panel-lbl">Raw activations (8 dims)</div>
+        <div class="bar-wrap" id="bars-raw"></div>
+        <div class="zero-line"></div>
+        <div class="stat-row" id="stats-raw"></div>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 4px;gap:4px;">
+        <div style="font-size:20px;color:var(--muted);">→</div>
+        <div id="norm-label" style="font-family:var(--mono);font-size:10px;color:var(--muted);text-align:center;line-height:1.7;"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-lbl">After LayerNorm</div>
+        <div class="bar-wrap" id="bars-norm"></div>
+        <div class="zero-line"></div>
+        <div class="stat-row" id="stats-norm"></div>
+      </div>
+    </div>
+
+    <div style="margin-top:12px;background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--muted);line-height:1.65;" id="norm-insight"></div>
+  </div>
+
+  <h2>LayerNorm vs BatchNorm — why transformers need LayerNorm</h2>
+  <p>BatchNorm normalises across the <em>batch dimension</em> — it computes mean and std across all examples in the batch for each feature. This works for CNNs but has a fatal flaw for transformers: during inference with batch size 1, you need running statistics tracked during training — a messy approximation. It also makes each example's normalisation depend on the rest of the batch, which breaks autoregressive generation.</p>
+  <p>LayerNorm normalises across the <em>feature dimension D</em> — it computes mean and std across all D dimensions for each token, independently. Batch size doesn't matter. Every token is normalised using only its own values. This is why every transformer uses LayerNorm.</p>
+
+  <h2>Post-norm vs pre-norm — the architecture difference</h2>
+  <p>Both use LayerNorm. The only question is: where inside the residual block does it go?</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">Architecture comparison — same blocks, different norm position</div>
+    <div class="arch-panels">
+
+      <div class="arch-col">
+        <div class="arch-title" style="color:#993C1D;">Post-norm (original, 2017)</div>
+        <div class="io-lbl">x  [B, T, D]</div>
+        <div style="position:relative;">
+          <div class="res-side"></div>
+          <div style="margin-left:40px;">
+            <div class="conn2"></div>
+            <div class="blk" style="border-color:#185FA594;color:#185FA5;background:rgba(12,34,68,0.18);">Self-attention</div>
+            <div class="conn2"></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;margin-left:20px;">
+            <div style="font-size:16px;color:var(--muted);">→</div>
+            <div class="add-c">+</div>
+          </div>
+          <div style="margin-left:40px;">
+            <div class="conn2-sm"></div>
+            <div class="blk" style="border-color:#0F6E5694;color:#1D9E75;background:rgba(8,80,65,0.18);">LayerNorm</div>
+            <div class="conn2"></div>
+            <div class="blk" style="border-color:#BA751794;color:#BA7517;background:rgba(99,56,6,0.18);">FFN</div>
+            <div class="conn2"></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;margin-left:20px;">
+            <div style="font-size:16px;color:var(--muted);">→</div>
+            <div class="add-c">+</div>
+          </div>
+          <div style="margin-left:40px;">
+            <div class="conn2-sm"></div>
+            <div class="blk" style="border-color:#0F6E5694;color:#1D9E75;background:rgba(8,80,65,0.18);">LayerNorm</div>
+          </div>
+        </div>
+        <div class="io-lbl" style="margin-top:4px;">x'  [B, T, D]</div>
+        <div class="fml-box" style="border-left:3px solid #993C1D;">x = LayerNorm(x + Attn(x))
+x = LayerNorm(x + FFN(x))</div>
+        <p style="font-size:12px;color:var(--muted);margin-top:8px;line-height:1.65;">Residual and sub-layer output are summed first, then normalized together. The norm sees the full combined signal at every junction.</p>
+      </div>
+
+      <div class="arch-col">
+        <div class="arch-title" style="color:#185FA5;">Pre-norm (modern LLMs)</div>
+        <div class="io-lbl">x  [B, T, D]</div>
+        <div style="position:relative;">
+          <div class="res-side"></div>
+          <div style="margin-left:40px;">
+            <div class="conn2"></div>
+            <div class="blk" style="border-color:#0F6E5694;color:#1D9E75;background:rgba(8,80,65,0.18);">LayerNorm</div>
+            <div class="conn2-sm"></div>
+            <div class="blk" style="border-color:#185FA594;color:#185FA5;background:rgba(12,34,68,0.18);">Self-attention</div>
+            <div class="conn2"></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;margin-left:20px;">
+            <div style="font-size:16px;color:var(--muted);">→</div>
+            <div class="add-c">+</div>
+          </div>
+          <div style="margin-left:40px;">
+            <div class="conn2"></div>
+            <div class="blk" style="border-color:#0F6E5694;color:#1D9E75;background:rgba(8,80,65,0.18);">LayerNorm</div>
+            <div class="conn2-sm"></div>
+            <div class="blk" style="border-color:#BA751794;color:#BA7517;background:rgba(99,56,6,0.18);">FFN</div>
+            <div class="conn2"></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;margin-left:20px;">
+            <div style="font-size:16px;color:var(--muted);">→</div>
+            <div class="add-c">+</div>
+          </div>
+          <div style="margin-left:40px;"><div class="conn2"></div></div>
+        </div>
+        <div class="io-lbl" style="margin-top:4px;">x'  [B, T, D]</div>
+        <div class="fml-box" style="border-left:3px solid #185FA5;">x = x + Attn(LayerNorm(x))
+x = x + FFN(LayerNorm(x))</div>
+        <p style="font-size:12px;color:var(--muted);margin-top:8px;line-height:1.65;">Norm is applied to the residual stream before it enters the sub-layer. The raw residual is added directly — it never passes through a norm.</p>
+      </div>
+
+    </div>
+  </div>
+
+  <h2>Why pre-norm wins — gradient flow</h2>
+  <p>The difference sounds small but has a huge effect during backpropagation. In post-norm, the gradient must pass <em>through</em> LayerNorm at every residual junction. LayerNorm divides by σ in the forward pass, which means multiplying by 1/σ in the backward pass — this can amplify or shrink the gradient unpredictably, especially early in training when σ is unstable.</p>
+  <p>In pre-norm, the residual addition is a raw <code>x + F(LN(x))</code>. The gradient of a sum is just the sum of the gradients — so the gradient flows directly back through the addition, bypassing any norm. The residual highway is perfectly clean. Drag the sliders to see the difference.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">Gradient strength reaching each layer — drag to explore</div>
+    <div class="ctrl-row">
+      <label>Layers:</label>
+      <input type="range" min="2" max="32" step="1" value="12" id="nlayers" oninput="drawGrad()" style="width:120px;">
+      <output id="nl-out">12</output>
+      <label style="margin-left:12px;">Gradient decay per layer:</label>
+      <input type="range" min="40" max="99" step="1" value="75" id="gscale" oninput="drawGrad()" style="width:120px;">
+      <output id="gs-out">0.75</output>
+    </div>
+    <div class="gf-wrap">
+      <div class="gf-col">
+        <div class="gf-title" style="color:#993C1D;">Post-norm</div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:6px;">Gradient passes through LayerNorm at every junction</div>
+        <div id="post-layers"></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px;font-family:var(--mono);" id="post-summary"></div>
+      </div>
+      <div class="gf-col">
+        <div class="gf-title" style="color:#0F6E56;">Pre-norm</div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:6px;">Residual bypasses norm — clean gradient highway</div>
+        <div id="pre-layers"></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px;font-family:var(--mono);" id="pre-summary"></div>
+      </div>
+    </div>
+
+    <div class="insight-grid">
+      <div class="icell" style="border-left:3px solid #993C1D;">
+        <strong style="color:#993C1D;">Post-norm — training instability</strong>
+        Gradient flows through LayerNorm at every residual junction. At early training, sub-layer outputs are large and unstable, making 1/σ unpredictable. Requires careful learning rate warm-up — start tiny, gradually increase. Without it, gradient explosion is common.
+      </div>
+      <div class="icell" style="border-left:3px solid #0F6E56;">
+        <strong style="color:#0F6E56;">Pre-norm — stable by design</strong>
+        Residual stream bypasses LayerNorm entirely. Gradient flows straight back through additions. Deep networks train without warm-up. At init, sub-layer outputs ≈ 0, so the whole network starts near the identity function — a well-understood stable point.
+      </div>
+    </div>
+  </div>
+
+  <h2>RMSNorm — what LLaMA and Mistral use</h2>
+  <p>LLaMA, Mistral, Gemma and most recent models use RMSNorm instead of full LayerNorm. It drops the mean-centering step entirely:</p>
+
+  <pre><code>RMS(x) = sqrt( mean(x²) )      # no mean subtraction
+x̂ = x / RMS(x)                 # just scale
+output = γ · x̂                 # only γ — no β shift</code></pre>
+
+  <p>The intuition: mean-centering contributes relatively little to training stability — the scale normalisation does most of the work. Dropping it removes one operation and one learned parameter per dimension. RMSNorm is roughly 15% faster than LayerNorm and achieves equal training stability. It is always used in pre-norm position.</p>
+
+  <div class="card-green">
+    <strong>In practice:</strong> Every major LLM released after 2020 uses pre-norm + RMSNorm. The combination is so dominant that "pre-norm" and "RMSNorm" are often mentioned together. LLaMA 1/2/3, Mistral, Gemma, Falcon, and most others all follow this pattern.
+  </div>
+
+  <h2>Summary</h2>
+  <table class="summary">
+    <thead><tr><th></th><th>Post-norm</th><th>Pre-norm</th></tr></thead>
+    <tbody>
+      <tr><td>Norm position</td><td>After residual add</td><td>Before sub-layer</td></tr>
+      <tr><td>Formula</td><td><code>LN(x + F(x))</code></td><td><code>x + F(LN(x))</code></td></tr>
+      <tr><td>Residual through norm?</td><td>Yes</td><td>No — bypasses it</td></tr>
+      <tr><td>Gradient highway</td><td>Blocked by LN at every junction</td><td>Clean — straight through additions</td></tr>
+      <tr><td>Training stability</td><td>Needs warm-up, fragile at depth</td><td>Stable, trains without warm-up</td></tr>
+      <tr><td>Init behaviour</td><td>Unpredictable activations</td><td>Near identity function</td></tr>
+      <tr><td>Norm variant</td><td>LayerNorm (γ and β)</td><td>RMSNorm (γ only) in modern models</td></tr>
+      <tr><td>Used by</td><td>Original transformer (2017)</td><td>GPT-2/3, LLaMA, Mistral, Gemma…</td></tr>
+      <tr><td>Final quality</td><td>Marginally better (sometimes)</td><td>Slightly lower — negligible in practice</td></tr>
+    </tbody>
+  </table>
+
+</div>
+
+<script>
+const MODES = {
+  normal:  { vals:[1.2,-0.8,2.1,0.3,-1.5,1.8,-0.4,0.9], label:'Normal', insight:'Normal range activations. LayerNorm still shifts to zero-mean and unit-variance. The relative shape of the bars is preserved — only scale and offset change.' },
+  explode: { vals:[24,-16,42,6,-30,36,-8,18], label:'Exploding (×20)', insight:'Activations have exploded ×20. Without norm these cause softmax saturation and gradient death. After LayerNorm: output is identical to the normal case. LayerNorm is invariant to activation magnitude.' },
+  collapse:{ vals:[0.06,-0.04,0.105,0.015,-0.075,0.09,-0.02,0.045], label:'Collapsing (÷20)', insight:'Activations collapsed to near-zero (÷20). Gradients would vanish. After LayerNorm: identical to normal. The network keeps learning even when activations shrink dramatically.' },
+  shift:   { vals:[16.2,14.2,17.1,15.3,13.5,16.8,14.6,15.9], label:'Shifted (+15)', insight:'All activations shifted up by 15 — mean is ~15 instead of ~0. After LayerNorm: the mean is subtracted out completely. LayerNorm is invariant to additive shifts.' },
+};
+
+const COL_NZ = '#185FA5', COL_N = '#0F6E56', COL_NEG = '#A32D2D';
+
+function drawBars(id, vals, posColor) {
+  const mx = Math.max(...vals.map(Math.abs), 0.001);
+  document.getElementById(id).innerHTML = vals.map(v => {
+    const h = Math.round((Math.abs(v)/mx) * 50);
+    const neg = v < 0;
+    return `<div class="bar" style="height:${h}px;background:${neg?COL_NEG:posColor};margin-${neg?'top':'bottom'}:${50-h}px;"></div>`;
+  }).join('');
+}
+
+function drawStats(id, vals) {
+  const mean = vals.reduce((a,b)=>a+b,0)/vals.length;
+  const std = Math.sqrt(vals.reduce((a,b)=>a+(b-mean)**2,0)/vals.length);
+  document.getElementById(id).innerHTML =
+    `<div class="stat">mean <b>${mean.toFixed(2)}</b></div>` +
+    `<div class="stat">std <b>${std.toFixed(2)}</b></div>` +
+    `<div class="stat">range <b>[${Math.min(...vals).toFixed(1)}, ${Math.max(...vals).toFixed(1)}]</b></div>`;
+  return {mean, std};
+}
+
+function layernorm(vals) {
+  const mean = vals.reduce((a,b)=>a+b,0)/vals.length;
+  const std = Math.sqrt(vals.reduce((a,b)=>a+(b-mean)**2,0)/vals.length + 1e-5);
+  return vals.map(v=>(v-mean)/std);
+}
+
+let curMode = 'normal';
+function setMode(mode) {
+  curMode = mode;
+  document.querySelectorAll('.mode-btn').forEach(b=>{
+    b.style.opacity = b.dataset.mode===mode ? '1' : '0.4';
+    b.style.borderColor = b.dataset.mode===mode ? getComputedStyle(document.documentElement).getPropertyValue('--accent') : '';
+  });
+  const {vals, insight} = MODES[mode];
+  drawBars('bars-raw', vals, COL_NZ);
+  const {mean, std} = drawStats('stats-raw', vals);
+  const normed = layernorm(vals);
+  drawBars('bars-norm', normed, COL_N);
+  drawStats('stats-norm', normed);
+  document.getElementById('norm-label').innerHTML = `(x − ${mean.toFixed(1)})\n÷ ${std.toFixed(2)}`;
+  document.getElementById('norm-insight').textContent = insight;
+}
+
+const btnWrap = document.getElementById('mode-btns');
+Object.entries(MODES).forEach(([k,{label}])=>{
+  const b = document.createElement('button');
+  b.textContent = label; b.dataset.mode = k; b.className = 'mode-btn';
+  b.style.fontSize='12px'; b.style.padding='5px 12px';
+  b.onclick = ()=>setMode(k);
+  btnWrap.appendChild(b);
+});
+
+setMode('normal');
+
+function drawGrad() {
+  const N = parseInt(document.getElementById('nlayers').value);
+  const gs = parseInt(document.getElementById('gscale').value)/100;
+  document.getElementById('nl-out').textContent = N;
+  document.getElementById('gs-out').textContent = gs.toFixed(2);
+
+  function render(containerId, getGrad, color, summaryId) {
+    let html='', final=null;
+    for(let i=N;i>=1;i--){
+      const g=getGrad(i,N,gs); final=g;
+      const pct=Math.min(100,Math.round(g*100));
+      const fc = g<0.08?'#A32D2D':g<0.35?'#BA7517':color;
+      html+=`<div class="layer-row">
+        <span style="color:var(--muted);">L${String(i).padStart(2,'0')}</span>
+        <div class="grad-bg"><div class="grad-fill" style="width:${pct}%;background:${fc};"></div></div>
+        <span style="font-size:10px;color:var(--muted);min-width:38px;text-align:right;">${(g*100).toFixed(1)}%</span>
+      </div>`;
+    }
+    document.getElementById(containerId).innerHTML=html;
+    const warn=final<0.05?' — vanishing!':final<0.15?' — weak':'';
+    document.getElementById(summaryId).textContent=`Layer 1 receives: ${(final*100).toFixed(1)}%${warn}`;
+  }
+
+  render('post-layers',(i,N,gs)=>Math.pow(gs,N-i+1),'#185FA5','post-summary');
+  render('pre-layers', (i,N,gs)=>Math.min(1, 0.88 + Math.pow(gs,N-i+1)*0.25),'#0F6E56','pre-summary');
+}
+
+drawGrad();
+</script>
+</body>
+</html>
