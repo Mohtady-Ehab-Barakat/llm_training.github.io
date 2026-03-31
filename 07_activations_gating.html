@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>07 — Activations & Gating · LLM Notes</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .af-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(90px,1fr)); gap:6px; margin-bottom:14px; }
+  .af-btn {
+    padding:7px 6px; border-radius:6px; font-size:12px; font-weight:500;
+    text-align:center; cursor:pointer; border:1.5px solid var(--border);
+    background:var(--bg2); color:var(--muted);
+    transition:all .14s; user-select:none; line-height:1.3;
+  }
+  .af-btn:hover { background:var(--bg3); color:var(--text); }
+  .af-btn.sel { color:#fff; }
+
+  .af-tag { display:inline-block; font-size:10px; font-weight:500; letter-spacing:.06em; text-transform:uppercase; border-radius:4px; padding:2px 8px; border:0.5px solid; margin-bottom:6px; }
+  .af-name { font-size:16px; font-weight:500; color:var(--text); margin-bottom:2px; }
+  .af-full { font-size:12px; color:var(--muted); margin-bottom:10px; }
+  .af-fml { font-family:var(--mono); font-size:12px; background:var(--bg3); border:0.5px solid var(--border); border-radius:var(--radius); padding:10px 14px; color:var(--text); line-height:1.85; margin:8px 0; white-space:pre; overflow-x:auto; }
+  .af-plain { font-size:13px; color:var(--muted); line-height:1.7; margin:8px 0; }
+  .af-use { font-size:12px; color:var(--muted); padding:8px 12px; background:var(--bg2); border-radius:0 var(--radius) var(--radius) 0; border:0.5px solid var(--border); margin-top:8px; line-height:1.6; }
+  .af-use b { color:var(--text); font-weight:500; }
+  .info-row { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  .info-chip { font-size:11px; font-family:var(--mono); background:var(--bg3); border:0.5px solid var(--border); border-radius:4px; padding:3px 8px; color:var(--muted); }
+  .info-chip b { color:var(--text); font-weight:500; }
+
+  .family-box { background:var(--bg2); border:0.5px solid var(--border); border-radius:var(--radius); padding:14px 16px; font-family:var(--mono); font-size:13px; color:var(--text); line-height:2; margin:12px 0; overflow-x:auto; }
+  .family-box .cm { color:var(--muted); font-size:11px; }
+  .family-box .hi { font-weight:500; }
+</style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <nav class="nav">
+    <a class="nav-home" href="index.html">← LLM Notes</a>
+    <span class="nav-title">07 / Activations & Gating</span>
+  </nav>
+
+  <div class="page-header">
+    <div class="tag">Building blocks</div>
+    <h1>Activations & Gating</h1>
+    <p class="subtitle">ReLU · GeLU · Swish · ELU · SeLU · GLU · ReGLU · GeGLU · SwiGLU · LiGLU</p>
+  </div>
+
+  <h2>What is an activation function?</h2>
+  <p>A neural network without activation functions is just a chain of matrix multiplications. No matter how many layers you stack, the whole thing collapses into one single linear transformation — it can only fit straight lines through data, which can't learn anything interesting.</p>
+  <p>An activation function is applied to the output of each layer to introduce a <em>bend</em>. Once you can bend, you can fit any shape. Think of it like this: a straight wire can only make a flat form. Add bends and you can make any sculpture. Activation functions are the bends.</p>
+
+  <div class="card-accent">
+    <strong>The core question every activation function answers:</strong> given a number x coming out of a neuron, what number should I pass forward?
+  </div>
+
+  <h2>What is gating?</h2>
+  <p>Simple activations apply the same fixed rule to every number. Gating is more powerful: let the network <em>learn</em> what to block and what to pass through, dynamically, based on the input itself.</p>
+  <p>In a gated unit, the input is used twice — once to produce a "content" signal and once to produce a "gate" signal (a number near 0 or 1). The final output is content × gate. When gate ≈ 1, content flows through freely. When gate ≈ 0, content is blocked. Both the content projection and the gate projection use separate learned weight matrices, so the network learns which patterns to let through.</p>
+  <p>Analogy: a valve on a pipe. The content is the water. The gate is the valve position. But unlike a manual valve, the valve position is <em>computed from the water pressure itself</em>.</p>
+
+  <h2>Interactive function explorer</h2>
+  <p>Click any function to see its curve and explanation. The horizontal axis is the input x (−4 to +4). The vertical axis is the output f(x). Pay attention to what happens at x=0 and for negative inputs — that's where all the interesting differences live.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">Click any activation to explore</div>
+    <div class="af-grid" id="af-btns"></div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;">
+      <div style="flex-shrink:0;">
+        <canvas id="af-canvas" width="240" height="200" style="border-radius:8px;background:var(--bg2);border:0.5px solid var(--border);display:block;"></canvas>
+        <div style="font-size:10px;color:var(--muted);text-align:center;margin-top:4px;">input x → output f(x)</div>
+      </div>
+      <div style="flex:1;min-width:200px;" id="af-detail"><div style="color:var(--muted);font-size:13px;padding:20px 0;">← click a function above</div></div>
+    </div>
+  </div>
+
+  <h2>Simple activations — explained plainly</h2>
+
+  <p><strong>ReLU</strong> is the most famous. The rule is brutal and simple: if x is negative, output 0. If positive, output x unchanged. Like a one-way valve — negative signals are completely blocked. Fast and easy. The problem: once a neuron outputs 0, its gradient is also 0 and it can never update again — a "dead neuron." In a big network, many neurons can die permanently.</p>
+
+  <p><strong>ELU</strong> fixes dead neurons by giving the negative side a smooth exponential curve instead of flat zero. Negative inputs produce small negative outputs, so the gradient is never exactly zero and neurons can always recover. The parameter α (usually 1.0) controls how far negative the output goes.</p>
+
+  <p><strong>SeLU</strong> is ELU with two specific magic constants (λ ≈ 1.0507, α ≈ 1.6733) derived mathematically. These exact values make the network <em>self-normalizing</em> — stack many SeLU layers and activations automatically stay near mean=0, std=1 without any LayerNorm. Clever, but rare in transformers since we do normalisation explicitly.</p>
+
+  <p><strong>GeLU</strong> is what BERT, GPT-2, and GPT-3 use. Instead of a hard cut at zero, the gate is probabilistic. A large positive is almost certainly passed through. A large negative is almost certainly blocked. Numbers near zero are passed partially — a small positive might be 60% through, a tiny negative might be 40% blocked. The curve looks like ReLU with a gentle S-shape around zero. Works better than ReLU for language models.</p>
+
+  <p><strong>Swish</strong> (also called SiLU) multiplies x by sigmoid(x). Sigmoid is always between 0 and 1, so it acts as a soft gate on the signal itself. The interesting feature is a small dip below zero for slightly negative inputs — the curve is non-monotone, which helps the network learn richer patterns. This is the base function inside SwiGLU.</p>
+
+  <h2>Gated units — explained plainly</h2>
+
+  <p><strong>GLU</strong> (Gated Linear Unit) is the parent of the whole gating family. The input x is linearly projected into two separate vectors using two different weight matrices W and V. One gives the content, the other goes through sigmoid (→ 0 to 1 range) to give the gate. Output = content × gate. The network learns both W and V during training.</p>
+
+  <p><strong>ReGLU</strong> replaces sigmoid in the gate with ReLU. The gate is now either zero (fully blocked) or positive (open). Simpler and faster — no exp() inside the sigmoid. Less smooth but still effective.</p>
+
+  <p><strong>GeGLU</strong> replaces sigmoid with GeLU in the gate. The gate is smooth and probabilistic — partially-good signals can partially pass through. Softer and more expressive than ReGLU.</p>
+
+  <p><strong>SwiGLU</strong> replaces sigmoid with Swish in the gate. This is the one that matters most — it's what LLaMA, Mistral, and Gemma use in every FFN layer. It empirically outperforms GeLU and all other variants on language modeling benchmarks. Nobody has a perfect theoretical explanation for why — it just works. One practical note: because SwiGLU uses two projections instead of one, the hidden FFN size changes from 4D to 8D/3 to keep parameter count equal.</p>
+
+  <p><strong>LiGLU</strong> removes the activation function from the gate entirely — two linear projections multiplied together, no nonlinearity at all. Surprisingly competitive in research. Very fast since there's no exp() or erf() to compute.</p>
+
+  <h2>The family tree</h2>
+
+  <div class="family-box">
+<span class="cm">── Simple activations ────────────────────────────────────</span>
+ReLU   <span class="cm">→ max(0, x)                        hard cut, fast, dead neurons</span>
+ELU    <span class="cm">→ x if x>0, α(eˣ−1) if x≤0       smooth negatives, no dead neurons</span>
+SeLU   <span class="cm">→ ELU with magic constants         self-normalising, rare in LLMs</span>
+GeLU   <span class="cm">→ x · Φ(x)                        smooth probabilistic gate  ← GPT-2/3</span>
+Swish  <span class="cm">→ x · σ(x)                        smooth, non-monotone       ← base of SwiGLU</span>
+
+<span class="cm">── Gating family (all use two weight matrices: W and V) ──</span>
+GLU    <span class="cm">→ (xW) ⊙ σ(xV)                    parent — sigmoid gate</span>
+ReGLU  <span class="cm">→ (xW) ⊙ ReLU(xV)                 hard gate</span>
+GeGLU  <span class="cm">→ (xW) ⊙ GeLU(xV)                 smooth probabilistic gate</span>
+<span class="hi">SwiGLU</span> <span class="cm">→ (xW) ⊙ Swish(xV)               smooth learned gate  ← LLaMA, Mistral, Gemma</span>
+LiGLU  <span class="cm">→ (xW) ⊙ (xV)                     no nonlinearity in gate</span>
+  </div>
+
+  <div class="card-green">
+    <strong>What to remember:</strong> for modern LLMs the answer is almost always SwiGLU in the FFN layers. If you open a LLaMA or Mistral config file you'll see <code>hidden_act: "silu"</code> — that's Swish/SiLU, the gate activation inside SwiGLU. The FFN hidden size will be 8/3 × model_dim rather than the 4× you'd expect from a plain FFN, because the gating unit uses two projections.
+  </div>
+
+  <dl class="key-concept">
+    <dt>Dead neuron</dt><dd>A neuron stuck at output=0 forever because ReLU zeroed it and gradient can't update it. Fixed by ELU, GeLU, Swish.</dd>
+    <dt>Monotone</dt><dd>Always increasing or always decreasing. ReLU, ELU, GeLU are monotone. Swish is not — it dips slightly below zero for small negatives.</dd>
+    <dt>Smooth</dt><dd>No sharp corners or kinks. GeLU, Swish, ELU are smooth. ReLU has a kink at x=0. Smooth → better gradient flow.</dd>
+    <dt>Gating</dt><dd>Using one signal to control how much of another signal passes through. The gate is learned — the network decides what to let through.</dd>
+    <dt>⊙</dt><dd>Element-wise multiplication (Hadamard product). Two vectors of the same shape, multiplied position by position.</dd>
+    <dt>SiLU</dt><dd>Sigmoid Linear Unit — the same function as Swish. x · σ(x). When you see "silu" in model configs, it means Swish, which means SwiGLU in the FFN.</dd>
+  </dl>
+
+</div>
+
+<script>
+const FNS = [
+  { id:'relu',   name:'ReLU',   full:'Rectified Linear Unit',     cat:'basic',  color:'#4a9eff',
+    formula:'f(x) = max(0, x)',
+    fn:x=>Math.max(0,x),
+    plain:'The simplest gate imaginable: if the number is negative, output 0. If positive, pass it through unchanged. Like a one-way valve — negative signals are completely blocked.',
+    props:{range:'[0, ∞)',smooth:'No (kink at 0)',zero:'x < 0'},
+    use:'Used everywhere for decades. Fast and simple. Problem: "dead neurons" — once a neuron outputs 0, its gradient is 0 and it never updates again.' },
+
+  { id:'elu',    name:'ELU',    full:'Exponential Linear Unit',   cat:'basic',  color:'#f59e0b',
+    formula:'f(x) = x              if x > 0\n      = α(eˣ − 1)    if x ≤ 0\n# α = 1.0 (default)',
+    fn:x=>x>0?x:(Math.exp(x)-1),
+    plain:'Like ReLU but the negative side smoothly curves toward −α instead of flat zero. Neurons never fully die. The smooth curve helps gradients flow even for negative inputs.',
+    props:{range:'(−α, ∞)',smooth:'Yes',zero:'Never fully'},
+    use:'Fixes ReLU dead neurons. α is usually 1.0. Less common now that GeLU exists.' },
+
+  { id:'selu',   name:'SeLU',   full:'Scaled ELU',                cat:'basic',  color:'#f87171',
+    formula:'f(x) = λ · x              if x > 0\n      = λ · α(eˣ − 1)    if x ≤ 0\n# λ ≈ 1.0507,  α ≈ 1.6733',
+    fn:x=>{const a=1.6733,l=1.0507;return l*(x>0?x:a*(Math.exp(x)-1));},
+    plain:'ELU with specific magic constants. These exact numbers make activations automatically stay near mean=0, std=1 through many layers — self-normalizing without needing LayerNorm.',
+    props:{range:'(−λα, ∞)',smooth:'Yes',zero:'Never'},
+    use:'Self-normalizing networks. Rarely used in transformers — LayerNorm does the job explicitly.' },
+
+  { id:'gelu',   name:'GeLU',   full:'Gaussian Error Linear Unit',cat:'smooth', color:'#3ecf8e',
+    formula:'f(x) = x · Φ(x)\n# Φ(x) = standard normal CDF\n# ≈ x · σ(1.702x)  fast approx',
+    fn:x=>x*0.5*(1+Math.tanh(Math.sqrt(2/Math.PI)*(x+0.044715*x*x*x))),
+    plain:'Instead of a hard cut at 0, the gate is probabilistic — small positives pass through with partial confidence, tiny negatives are almost (not quite) zeroed. Smooth everywhere. Better than ReLU for language models.',
+    props:{range:'(~−0.17, ∞)',smooth:'Yes',zero:'Never — very small but nonzero'},
+    use:'BERT, GPT-2, GPT-3. Default in many transformer FFN layers.' },
+
+  { id:'swish',  name:'Swish',  full:'Swish / SiLU',              cat:'smooth', color:'#a78bfa',
+    formula:'f(x) = x · σ(x)\n# σ(x) = 1 / (1 + e^−x)  (sigmoid)',
+    fn:x=>x/(1+Math.exp(-x)),
+    plain:'Multiplies the input by its own sigmoid. The sigmoid acts as a soft gate on the signal itself. Smooth, non-monotonic (small dip below x=0), and works better than ReLU on many tasks. Same function as SiLU.',
+    props:{range:'(~−0.28, ∞)',smooth:'Yes',zero:'Never'},
+    use:'EfficientNet, many vision models. Also the gate function inside SwiGLU.' },
+
+  { id:'glu',    name:'GLU',    full:'Gated Linear Unit',          cat:'gating', color:'#D85A30',
+    formula:'GLU(x) = (x·W) ⊙ σ(x·V)\n# ⊙ = element-wise multiply\n# W = content weights\n# V = gate weights (→ sigmoid → 0..1)',
+    fn:x=>{const g=1/(1+Math.exp(-x*0.8));return x*g;},
+    plain:'The input is projected into two halves using different weight matrices: a content half and a gate half. The gate is squashed through sigmoid (0→1). Output = content × gate. The network learns what to let through.',
+    props:{range:'Any real',smooth:'Yes',zero:'When gate ≈ 0'},
+    use:'WaveNet, early language models. Parent of GeGLU, SwiGLU etc.' },
+
+  { id:'reglu',  name:'ReGLU',  full:'ReLU Gated Linear Unit',    cat:'gating', color:'#BA7517',
+    formula:'ReGLU(x) = (x·W) ⊙ ReLU(x·V)\n# Gate uses ReLU instead of sigmoid\n# Gate is 0 or positive — binary-ish',
+    fn:x=>{const g=Math.max(0,x*0.9);return x*g;},
+    plain:'GLU but the gate uses ReLU instead of sigmoid. The gate is either zero (fully closed) or positive (open). Simpler and faster — no exp() inside sigmoid. Less smooth but effective.',
+    props:{range:'[0, ∞)',smooth:'No (kink)',zero:'When gate input < 0'},
+    use:'Some FFN variants. Parent idea leads to SwiGLU.' },
+
+  { id:'geglu',  name:'GeGLU',  full:'GeLU Gated Linear Unit',    cat:'gating', color:'#7F77DD',
+    formula:'GeGLU(x) = (x·W) ⊙ GeLU(x·V)\n# Gate uses GeLU instead of sigmoid\n# Smooth probabilistic gate',
+    fn:x=>{const g=x*0.5*(1+Math.tanh(Math.sqrt(2/Math.PI)*(x+0.044715*x*x*x)));return x*g;},
+    plain:'GLU where the gate half goes through GeLU. The gate is smooth and probabilistic — partial signals partially pass through. Content times GeLU-gate.',
+    props:{range:'Any real',smooth:'Yes',zero:'Rarely — gate near 0 for very negative inputs'},
+    use:'PaLM, some T5 variants. The "Ge" matches "GeLU".' },
+
+  { id:'swiglu', name:'SwiGLU', full:'Swish Gated Linear Unit',   cat:'gating', color:'#0F6E56',
+    formula:'SwiGLU(x) = (x·W) ⊙ Swish(x·V)\n            = (x·W) ⊙ (x·V · σ(x·V))\n# FFN hidden = 8D/3 (not 4D)\n# to keep param count equal',
+    fn:x=>{const gi=x*0.85;const g=gi/(1+Math.exp(-gi));return x*g;},
+    plain:'GLU where the gate uses Swish. The most popular gating mechanism in modern LLMs. Smooth, learns what to pass through, empirically outperforms GeLU. FFN hidden size changes from 4D to 8D/3 because two weight matrices are used.',
+    props:{range:'Any real',smooth:'Yes',zero:'Rarely'},
+    use:'LLaMA 1/2/3, Mistral, Gemma, PaLM2. The dominant FFN activation in 2024+.' },
+
+  { id:'liglu',  name:'LiGLU',  full:'Linear Gated Linear Unit',  cat:'gating', color:'#5F5E5A',
+    formula:'LiGLU(x) = (x·W) ⊙ (x·V)\n# No activation in the gate at all\n# Just two linear projections multiplied',
+    fn:x=>x*(x*0.7),
+    plain:'GLU with no activation function in the gate — just two linear projections multiplied together. Sounds too simple, but two learned projections together can approximate many patterns. Very fast: no exp() or erf().',
+    props:{range:'Any real',smooth:'Yes',zero:'When gate projection ≈ 0'},
+    use:'Research experiments. Sometimes competitive, rarely used in production.' },
+];
+
+const CW=240,CH=200,PAD=26,XLO=-4,XHI=4,YLO=-2,YHI=4;
+const dark=window.matchMedia('(prefers-color-scheme:dark)').matches;
+
+function toC(x,y){
+  return[PAD+(x-XLO)/(XHI-XLO)*(CW-2*PAD), CH-PAD-(y-YLO)/(YHI-YLO)*(CH-2*PAD)];
+}
+
+const canvas=document.getElementById('af-canvas');
+const ctx=canvas.getContext('2d');
+
+function drawGrid(){
+  ctx.clearRect(0,0,CW,CH);
+  const gridC=dark?'rgba(255,255,255,0.07)':'rgba(0,0,0,0.07)';
+  const axisC=dark?'rgba(255,255,255,0.22)':'rgba(0,0,0,0.22)';
+  ctx.strokeStyle=gridC; ctx.lineWidth=0.5;
+  [-3,-2,-1,1,2,3].forEach(v=>{
+    ctx.beginPath();const[cx]=toC(v,0);ctx.moveTo(cx,PAD);ctx.lineTo(cx,CH-PAD);ctx.stroke();
+    ctx.beginPath();const[,cy]=toC(0,v);ctx.moveTo(PAD,cy);ctx.lineTo(CW-PAD,cy);ctx.stroke();
+  });
+  ctx.strokeStyle=axisC; ctx.lineWidth=1;
+  const[ox,oy]=toC(0,0);
+  ctx.beginPath();ctx.moveTo(PAD,oy);ctx.lineTo(CW-PAD,oy);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(ox,PAD);ctx.lineTo(ox,CH-PAD);ctx.stroke();
+}
+
+function drawFn(fn,color,alpha){
+  ctx.strokeStyle=color; ctx.lineWidth=alpha?1.5:2.5;
+  ctx.globalAlpha=alpha||1; ctx.lineJoin='round';
+  ctx.beginPath();
+  let first=true;
+  for(let px=PAD;px<=CW-PAD;px++){
+    const x=XLO+(px-PAD)/(CW-2*PAD)*(XHI-XLO);
+    const y=fn(x);
+    const[cx,cy]=toC(x,y);
+    const cy2=Math.max(PAD-2,Math.min(CH-PAD+2,cy));
+    first?ctx.moveTo(cx,cy2):ctx.lineTo(cx,cy2);
+    first=false;
+  }
+  ctx.stroke();
+  ctx.globalAlpha=1;
+}
+
+const CAT_COLORS={basic:'#4a9eff',smooth:'#3ecf8e',gating:'#D85A30'};
+const CAT_LABELS={basic:'Simple',smooth:'Smooth',gating:'Gating'};
+const GATING_IDS=new Set(['glu','reglu','geglu','swiglu','liglu']);
+
+const btnWrap=document.getElementById('af-btns');
+FNS.forEach(f=>{
+  const b=document.createElement('div');
+  b.className='af-btn'; b.id='btn-'+f.id; b.textContent=f.name;
+  b.onclick=()=>select(f.id);
+  btnWrap.appendChild(b);
+});
+
+function select(id){
+  const f=FNS.find(x=>x.id===id);
+  document.querySelectorAll('.af-btn').forEach(b=>{
+    b.classList.remove('sel');
+    b.style.background=''; b.style.color=''; b.style.borderColor='';
+  });
+  const btn=document.getElementById('btn-'+id);
+  btn.classList.add('sel');
+  btn.style.background=f.color; btn.style.borderColor=f.color; btn.style.color='#fff';
+
+  drawGrid();
+  if(GATING_IDS.has(id)){
+    drawFn(FNS.find(x=>x.id==='swish').fn,'#a78bfa',0.2);
+  }
+  drawFn(f.fn,f.color);
+
+  const cc=CAT_COLORS[f.cat];
+  document.getElementById('af-detail').innerHTML=`
+    <div class="af-tag" style="color:${cc};border-color:${cc};">${CAT_LABELS[f.cat]}</div>
+    <div class="af-name">${f.name}</div>
+    <div class="af-full">${f.full}</div>
+    <div class="af-fml">${f.formula}</div>
+    <div class="af-plain">${f.plain}</div>
+    <div class="info-row">
+      <div class="info-chip">output range <b>${f.props.range}</b></div>
+      <div class="info-chip">smooth <b>${f.props.smooth}</b></div>
+      <div class="info-chip">zero when <b>${f.props.zero}</b></div>
+    </div>
+    <div class="af-use" style="border-left:3px solid ${f.color};"><b>Used in:</b> ${f.use}</div>
+  `;
+}
+
+drawGrid();
+select('relu');
+</script>
+</body>
+</html>
