@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>03 — Sparsity · LLM Notes</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .slider-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .slider-row label { font-size: 13px; color: var(--muted); white-space: nowrap; width: 80px; flex-shrink: 0; }
+  .slider-row output { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--text); min-width: 48px; }
+
+  .matrix-wrap { display: flex; gap: 32px; flex-wrap: wrap; align-items: flex-start; }
+  .matrix-block { flex: 1; min-width: 180px; }
+  .matrix-sublabel { font-size: 12px; color: var(--muted); margin-bottom: 10px; font-weight: 500; }
+  .mgrid { display: inline-grid; gap: 3px; }
+  .mcell {
+    width: 32px; height: 32px; border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 500; font-family: var(--mono);
+    border: 0.5px solid var(--border);
+    transition: background 0.2s, color 0.2s;
+  }
+  .mcell.nz  { background: #0C2244; border-color: #185FA5; color: #85B7EB; }
+  .mcell.z   { background: var(--bg3); color: #3a4050; }
+  .mcell.sk  { background: var(--bg); border-color: #1e2228; color: #1e2228; }
+
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+  .leg { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
+  .leg-sq { width: 11px; height: 11px; border-radius: 3px; flex-shrink: 0; }
+
+  .stat-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .chip { background: var(--bg3); border: 0.5px solid var(--border); border-radius: 5px; padding: 5px 10px; font-size: 12px; color: var(--muted); font-family: var(--mono); }
+  .chip span { color: var(--text); }
+
+  .ctrl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 28px; margin-bottom: 20px; }
+  @media(max-width:520px){ .ctrl-grid { grid-template-columns: 1fr; } }
+  .ctrl-item label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .ctrl-item .cv { font-family: var(--mono); font-size: 12px; color: var(--text); margin-top: 3px; }
+
+  .result-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 16px 0; }
+  @media(max-width:500px){ .result-grid { grid-template-columns: 1fr 1fr; } }
+  .rcard { background: var(--bg3); border-radius: var(--radius); padding: 12px 14px; border: 0.5px solid var(--border); }
+  .rcard .rl { font-size: 11px; color: var(--muted); margin-bottom: 5px; }
+  .rcard .rv { font-size: 17px; font-weight: 500; color: var(--text); font-family: var(--mono); }
+  .rcard.hi  { border-color: #0F6E56; background: rgba(15,110,86,0.09); }
+  .rcard.hi .rv { color: var(--accent2); }
+
+  .bar-section { margin-top: 16px; }
+  .bar-row { display: grid; grid-template-columns: 72px 1fr 110px; gap: 10px; align-items: center; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
+  .bar-bg { background: var(--bg3); border-radius: 4px; height: 22px; border: 0.5px solid var(--border); position: relative; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 4px; display: flex; align-items: center; padding-left: 8px; transition: width 0.3s; }
+  .bar-lbl { font-size: 11px; font-weight: 500; }
+
+  .formula-block {
+    background: var(--bg2); border: 0.5px solid var(--border);
+    border-left: 3px solid var(--accent); border-radius: 0 var(--radius) var(--radius) 0;
+    padding: 14px 18px; font-family: var(--mono); font-size: 13px;
+    color: var(--text); line-height: 2.1; margin: 16px 0;
+    overflow-x: auto;
+  }
+  .formula-block .cm { color: var(--muted); font-size: 11px; }
+  .formula-block b  { color: var(--accent); font-weight: 500; }
+</style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <nav class="nav">
+    <a class="nav-home" href="index.html">← LLM Notes</a>
+    <span class="nav-title">03 / Sparsity in LLM training</span>
+  </nav>
+
+  <div class="page-header">
+    <div class="tag">GPU efficiency</div>
+    <h1>Sparsity in LLM training</h1>
+    <p class="subtitle">What a sparse matrix is · FLOPs with and without sparsity · how GPUs exploit it</p>
+  </div>
+
+  <p>Most of the compute in an LLM sits inside matrix multiplications — weight matrices multiplied by activations, over and over. If many entries in those matrices are zero, those multiplications are useless (anything × 0 = 0). Sparsity is the idea of identifying and skipping those zeros to do less work.</p>
+
+  <h2>What does it mean for a matrix to be sparse?</h2>
+  <p>A matrix is sparse when most of its values are exactly zero. The <em>sparsity</em> of a matrix is the fraction of elements that are zero. A 50% sparse matrix has half its entries as zero; a 90% sparse matrix has nine out of every ten entries as zero.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">Adjust sparsity — watch the matrix change</div>
+
+    <div class="slider-row">
+      <label>Sparsity</label>
+      <input type="range" min="0" max="95" step="5" value="50" id="sp1" oninput="updateMatrix()" style="flex:1;">
+      <output id="sp1-out">50%</output>
+    </div>
+
+    <div class="legend">
+      <div class="leg"><div class="leg-sq" style="background:#0C2244;border:0.5px solid #185FA5;"></div>Non-zero value</div>
+      <div class="leg"><div class="leg-sq" style="background:var(--bg3);border:0.5px solid var(--border);"></div>Zero — computed anyway (dense)</div>
+      <div class="leg"><div class="leg-sq" style="background:var(--bg);border:0.5px solid #1e2228;"></div>Zero — skipped with hardware sparsity</div>
+    </div>
+
+    <div class="matrix-wrap">
+      <div class="matrix-block">
+        <div class="matrix-sublabel">Weight matrix W (8×8)</div>
+        <div class="mgrid" id="mgrid" style="grid-template-columns:repeat(8,32px);"></div>
+        <div class="stat-row" id="mstats"></div>
+      </div>
+      <div class="matrix-block" style="max-width:280px;">
+        <div class="matrix-sublabel">What this means for matmul</div>
+        <p style="font-size:13px;color:var(--muted);line-height:1.65;margin-bottom:10px;">
+          Each non-zero element in W requires one multiply and one add when computing W × x. Zero elements produce zero regardless — so on hardware that supports sparsity, those operations are simply skipped.
+        </p>
+        <div class="stat-row" id="flop-mini"></div>
+      </div>
+    </div>
+  </div>
+
+  <h2>The FLOP formula</h2>
+  <p>A standard matrix multiply of two matrices with shapes [M, K] and [K, N] produces an [M, N] output. Each of the M × N output elements requires K multiplications and K additions — that's 2K operations per output element, giving us:</p>
+
+  <pre><code>FLOPs (dense)  = 2 × M × K × N
+FLOPs (sparse) = 2 × M × K × N × (1 − sparsity)</code></pre>
+
+  <p>The factor of 2 comes from the multiply-accumulate: for each pair of elements, you do a multiply then an add. At 50% sparsity you do half the multiplications. At 90% sparsity you do only 10%.</p>
+
+  <div class="card-accent">
+    <strong>Concrete example — one transformer FFN layer:</strong> A typical 7B model has FFN weight matrices of shape [4096, 16384]. Dense FLOPs = 2 × 4096 × 16384 ≈ 134M FLOPs. At 50% sparsity that drops to ~67M FLOPs per forward pass through that layer.
+  </div>
+
+  <h2>Interactive FLOP calculator</h2>
+  <p>Adjust the matrix size, sparsity, and training scale to see how the FLOP savings compound across a full training run.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">Training FLOP calculator</div>
+
+    <div class="ctrl-grid">
+      <div class="ctrl-item">
+        <label>Matrix size (M = K = N)</label>
+        <input type="range" min="512" max="8192" step="512" value="4096" id="msz" oninput="calcFlops()" style="width:100%;">
+        <div class="cv" id="msz-out">4,096</div>
+      </div>
+      <div class="ctrl-item">
+        <label>Sparsity</label>
+        <input type="range" min="0" max="95" step="5" value="50" id="sp2" oninput="calcFlops()" style="width:100%;">
+        <div class="cv" id="sp2-out">50%</div>
+      </div>
+      <div class="ctrl-item">
+        <label>Matmuls per forward pass</label>
+        <input type="range" min="1" max="200" step="1" value="96" id="nmm" oninput="calcFlops()" style="width:100%;">
+        <div class="cv" id="nmm-out">96</div>
+      </div>
+      <div class="ctrl-item">
+        <label>Training steps</label>
+        <input type="range" min="1000" max="100000" step="1000" value="10000" id="nsteps" oninput="calcFlops()" style="width:100%;">
+        <div class="cv" id="nsteps-out">10,000</div>
+      </div>
+    </div>
+
+    <div class="formula-block" id="formula-block"></div>
+
+    <div class="result-grid" id="result-grid"></div>
+
+    <div class="bar-section">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px;font-weight:500;">Forward pass FLOPs</div>
+      <div class="bar-row">
+        <span>Dense</span>
+        <div class="bar-bg">
+          <div class="bar-fill" style="width:100%;background:#0C2244;">
+            <span class="bar-lbl" style="color:#85B7EB;" id="d-bar-lbl"></span>
+          </div>
+        </div>
+        <span id="d-bar-val" style="text-align:right;font-family:var(--mono);font-size:11px;"></span>
+      </div>
+      <div class="bar-row">
+        <span>Sparse</span>
+        <div class="bar-bg">
+          <div class="bar-fill" id="s-bar" style="background:#04342C;">
+            <span class="bar-lbl" style="color:#5DCAA5;" id="s-bar-lbl"></span>
+          </div>
+        </div>
+        <span id="s-bar-val" style="text-align:right;font-family:var(--mono);font-size:11px;color:var(--accent2);"></span>
+      </div>
+    </div>
+  </div>
+
+  <h2>Why sparsity is tricky on a GPU</h2>
+  <p>A GPU is built to run millions of multiply-adds in parallel. The problem is that naive sparse computation is actually <em>slower</em> on a GPU — skipping random zeros means jumping around memory unpredictably, which destroys the cache efficiency that makes GPUs fast in the first place.</p>
+
+  <p>The solution is <em>structured sparsity</em>. NVIDIA's A100 introduced hardware support for <strong>2:4 sparsity</strong> — a constraint where exactly 2 of every 4 consecutive weights must be zero. This fixed pattern is regular enough that dedicated sparse tensor cores can skip the zeros without any irregular memory access, delivering a genuine 2× throughput on those operations.</p>
+
+  <div class="card-warn">
+    <strong>The practical caveat:</strong> 50% sparsity doesn't give you 2× wall-clock speedup. You still pay for storing the sparse format (indices of non-zeros), the overhead of pruning and potentially fine-tuning, and not all operations benefit equally. Real-world speedups on well-optimised hardware are typically 1.3–1.7×.
+  </div>
+
+  <h2>Where sparsity shows up in LLM training</h2>
+
+  <dl class="key-concept">
+    <dt>Weight pruning</dt><dd>After initial training, small weights are zeroed out ("pruned"), then the model is fine-tuned to recover accuracy. This is the most common form.</dd>
+    <dt>Activation sparsity</dt><dd>ReLU produces exact zeros for negative inputs. SwiGLU (used in LLaMA etc.) produces near-zeros that can be thresholded. Up to 90%+ of FFN activations can be zero.</dd>
+    <dt>Gradient sparsity</dt><dd>Gradients during backprop are often very sparse, especially early in training. Gradient compression methods exploit this to reduce communication in multi-GPU training.</dd>
+    <dt>Attention sparsity</dt><dd>Most attention weights are near-zero for distant tokens. Sparse attention patterns (local + global) like those in Longformer reduce the O(n²) cost of full attention.</dd>
+    <dt>2:4 structured</dt><dd>NVIDIA's hardware-enforced pattern: 2 non-zeros per group of 4. Supported natively on A100/H100 sparse tensor cores with 2× throughput.</dd>
+  </dl>
+
+</div>
+
+<script>
+const N8 = 8;
+let mask8 = [];
+
+function buildMask(n, sp) {
+  const total = n * n;
+  const zeros = Math.round(total * sp / 100);
+  const flat = Array(total).fill(1);
+  let placed = 0;
+  while (placed < zeros) {
+    const i = Math.floor(Math.random() * total);
+    if (flat[i] === 1) { flat[i] = 0; placed++; }
+  }
+  return flat;
+}
+
+function updateMatrix() {
+  const sp = parseInt(document.getElementById('sp1').value);
+  document.getElementById('sp1-out').textContent = sp + '%';
+  mask8 = buildMask(N8, sp);
+  const grid = document.getElementById('mgrid');
+  grid.innerHTML = '';
+  const vals = mask8.map(m => m ? (Math.floor(Math.random() * 9) - 4 || 1) : 0);
+  mask8.forEach((m, i) => {
+    const d = document.createElement('div');
+    d.className = 'mcell ' + (m ? 'nz' : (sp >= 50 ? 'sk' : 'z'));
+    d.textContent = m ? vals[i] : '0';
+    grid.appendChild(d);
+  });
+  const nz = mask8.filter(x => x).length;
+  const total = N8 * N8;
+  document.getElementById('mstats').innerHTML =
+    `<div class="chip">Total: <span>${total}</span></div>` +
+    `<div class="chip">Non-zeros: <span>${nz}</span></div>` +
+    `<div class="chip">Zeros: <span>${total - nz}</span></div>`;
+  const dense = 2 * total, sparse = 2 * nz;
+  document.getElementById('flop-mini').innerHTML =
+    `<div class="chip">Dense FLOPs: <span>${dense}</span></div>` +
+    `<div class="chip">Sparse FLOPs: <span>${sparse}</span></div>` +
+    `<div class="chip">Saving: <span>${sp}%</span></div>`;
+}
+
+function fmt(n) {
+  if (n >= 1e18) return (n/1e18).toFixed(2) + ' EFLOPs';
+  if (n >= 1e15) return (n/1e15).toFixed(2) + ' PFLOPs';
+  if (n >= 1e12) return (n/1e12).toFixed(2) + ' TFLOPs';
+  if (n >= 1e9)  return (n/1e9).toFixed(2)  + ' GFLOPs';
+  if (n >= 1e6)  return (n/1e6).toFixed(2)  + ' MFLOPs';
+  return Math.round(n).toLocaleString() + ' FLOPs';
+}
+
+function calcFlops() {
+  const M     = parseInt(document.getElementById('msz').value);
+  const sp    = parseInt(document.getElementById('sp2').value);
+  const nmm   = parseInt(document.getElementById('nmm').value);
+  const steps = parseInt(document.getElementById('nsteps').value);
+
+  document.getElementById('msz-out').textContent    = M.toLocaleString();
+  document.getElementById('sp2-out').textContent    = sp + '%';
+  document.getElementById('nmm-out').textContent    = nmm;
+  document.getElementById('nsteps-out').textContent = steps.toLocaleString();
+
+  const denseOne  = 2 * M * M * M;
+  const sparseOne = denseOne * (1 - sp / 100);
+  const denseFwd  = denseOne * nmm;
+  const sparseFwd = sparseOne * nmm;
+  const denseAll  = denseFwd * 3 * steps;
+  const sparseAll = sparseFwd * 3 * steps;
+  const speedup   = (100 / Math.max(1, 100 - sp)).toFixed(2);
+
+  document.getElementById('formula-block').innerHTML =
+    `<span class="cm">// One matmul: C = A × B, shapes [M,K] × [K,N] where M=K=N=${M.toLocaleString()}</span>\n` +
+    `FLOPs (dense)  = 2 × M³ = 2 × ${M.toLocaleString()}³ = <b>${fmt(denseOne)}</b>\n` +
+    `FLOPs (sparse) = dense × (1 − ${sp}%) = <b>${fmt(sparseOne)}</b>\n` +
+    `<span class="cm">// ×3 for backprop (roughly 3× the forward pass FLOPs)</span>`;
+
+  document.getElementById('result-grid').innerHTML =
+    `<div class="rcard"><div class="rl">Dense — one matmul</div><div class="rv">${fmt(denseOne)}</div></div>` +
+    `<div class="rcard"><div class="rl">Sparse — one matmul</div><div class="rv">${fmt(sparseOne)}</div></div>` +
+    `<div class="rcard hi"><div class="rl">Saving per matmul</div><div class="rv">${sp}%</div></div>` +
+    `<div class="rcard"><div class="rl">Dense — full training</div><div class="rv">${fmt(denseAll)}</div></div>` +
+    `<div class="rcard"><div class="rl">Sparse — full training</div><div class="rv">${fmt(sparseAll)}</div></div>` +
+    `<div class="rcard hi"><div class="rl">Theoretical speedup</div><div class="rv">${speedup}×</div></div>`;
+
+  document.getElementById('d-bar-lbl').textContent = fmt(denseFwd);
+  document.getElementById('d-bar-val').textContent = fmt(denseFwd);
+  document.getElementById('s-bar').style.width     = Math.max(3, 100 - sp) + '%';
+  document.getElementById('s-bar-lbl').textContent = fmt(sparseFwd);
+  document.getElementById('s-bar-val').textContent = fmt(sparseFwd);
+}
+
+updateMatrix();
+calcFlops();
+</script>
+</body>
+</html>

@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>04 — Optimizers · LLM Notes</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .tog{padding:4px 12px;border-radius:14px;font-size:12px;cursor:pointer;font-weight:500;border-width:1.5px;border-style:solid;background:transparent;transition:opacity .15s;}
+  .tog.on{opacity:1;}.tog.off{opacity:0.28;}
+
+  .ocard {
+    background: var(--bg2); border: 0.5px solid var(--border);
+    border-radius: var(--radius-lg); padding: 16px 20px; margin-bottom: 12px;
+    border-left: 3px solid var(--oc, #888);
+  }
+  .oname { font-size: 14px; font-weight: 500; color: var(--oc,#888); margin-bottom: 3px; }
+  .ofix  { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+  .ocode {
+    font-family: var(--mono); font-size: 12px; line-height: 2;
+    color: var(--text); background: var(--bg3);
+    border: 0.5px solid var(--border); border-radius: 6px;
+    padding: 10px 14px; overflow-x: auto;
+  }
+  .ocode .kw { color: var(--oc,#888); font-weight: 500; }
+  .ocode .cm { color: var(--muted); font-size: 11px; }
+  .params { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .param  { font-family: var(--mono); font-size: 11px; background: var(--bg3); border: 0.5px solid var(--border); border-radius: 4px; padding: 2px 7px; color: var(--muted); }
+
+  .loss-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px,1fr)); gap: 6px; margin-top: 10px; }
+  .lcell { border: 0.5px solid var(--border); border-radius: 6px; padding: 7px 10px; }
+  .lname { font-size: 10px; font-weight: 500; margin-bottom: 3px; }
+  .lval  { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--text); }
+</style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <nav class="nav">
+    <a class="nav-home" href="index.html">← LLM Notes</a>
+    <span class="nav-title">04 / Optimizers</span>
+  </nav>
+
+  <div class="page-header">
+    <div class="tag">Training dynamics</div>
+    <h1>Optimizers</h1>
+    <p class="subtitle">Momentum · Adagrad · RMSProp · Adam · AdamW — what each one fixes</p>
+  </div>
+
+  <p>During training, the model's parameters (weights) need to be nudged after every batch to reduce the loss. The <em>gradient</em> tells you which direction reduces the loss. An optimizer decides <em>how much</em> to nudge each weight, and <em>in what way</em>, given that gradient. The simplest version — vanilla gradient descent — is just <code>w = w − lr × gradient</code>. Every optimizer below is an improvement on that idea, each one fixing a specific weakness of the previous.</p>
+
+  <h2>Loss surface — optimizer paths</h2>
+  <p>The surface below is an elongated bowl: steep in y, shallow in x. This is a classic stress test — the steep walls cause oscillation in naive optimizers, and the shallow floor makes slow ones converge very slowly. Toggle each optimizer to compare their paths to the minimum (centre).</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">Interactive loss surface — toggle optimizers, pause/replay animation</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;" id="tg"></div>
+    <canvas id="cv" width="640" height="280" style="width:100%;border-radius:8px;background:var(--bg2);"></canvas>
+    <div style="display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap;">
+      <button onclick="doReset()">↺ Reset</button>
+      <button onclick="doPlay()" id="pb">⏸ Pause</button>
+      <span style="font-size:12px;color:var(--muted);">Step <span id="sn" style="font-family:var(--mono);font-weight:500;color:var(--text);">0</span> / 60</span>
+      <span style="font-size:11px;color:var(--muted);margin-left:auto;">loss = ½x² + 5y² (narrow valley)</span>
+    </div>
+    <div class="loss-grid" id="ld"></div>
+  </div>
+
+  <h2>What is an optimizer?</h2>
+  <p>After computing the loss and running backpropagation to get gradients, the optimizer applies an <em>update rule</em> to each weight. The update rule can be as simple as subtracting a fixed fraction of the gradient, or as sophisticated as maintaining per-weight statistics that adapt the step size dynamically.</p>
+
+  <p>The key things an optimizer controls are: how fast to move (learning rate), whether to smooth over noisy gradients (momentum), and whether to slow down for weights that already get large updates (adaptive learning rates).</p>
+
+  <h2>The optimizers — in order of evolution</h2>
+
+  <div class="ocard" style="--oc:#4a9eff;">
+    <div class="oname">Momentum</div>
+    <div class="ofix">Fixes: oscillation and slow convergence of vanilla SGD</div>
+    <div class="ocode">
+<span class="kw">v</span>  = β·v + lr·∇L        <span class="cm"># build up velocity in gradient direction</span>
+<span class="kw">w</span>  = w − v              <span class="cm"># move along velocity, not raw gradient</span>
+    </div>
+    <div class="params"><span class="param">lr ≈ 0.01</span><span class="param">β = 0.9</span></div>
+  </div>
+
+  <p>Vanilla gradient descent reacts only to the current gradient — in a narrow valley this causes it to bounce off the steep walls repeatedly. Momentum fixes this by accumulating a <em>velocity</em> vector. Past gradients keep pushing you in the same direction, so you accelerate along consistent directions (the valley floor) and dampen oscillations across steep ones. β = 0.9 means 90% of the old velocity survives each step. You can think of it as a ball rolling downhill: it doesn't stop instantly when the slope changes.</p>
+
+  <div class="ocard" style="--oc:#f59e0b;">
+    <div class="oname">Adagrad</div>
+    <div class="ofix">Fixes: same learning rate for all weights regardless of gradient frequency</div>
+    <div class="ocode">
+<span class="kw">G</span>  = G + (∇L)²           <span class="cm"># sum of squared gradients — grows forever</span>
+<span class="kw">w</span>  = w − (lr / √(G+ε)) · ∇L
+    </div>
+    <div class="params"><span class="param">lr ≈ 0.01</span><span class="param">ε = 1e-8</span></div>
+  </div>
+
+  <p>Different weights have very different gradient magnitudes. Common-feature weights get large gradients often and would overshoot with a fixed lr. Rare-feature weights barely update. Adagrad gives each weight its own effective learning rate by dividing by the square root of the cumulative sum of squared gradients. Weights that have seen large gradients get smaller steps; weights that rarely update keep larger steps.</p>
+
+  <div class="card-warn">
+    <strong>Adagrad's problem:</strong> G only ever grows, so the effective learning rate shrinks toward zero and training eventually stalls completely. This is why you see it slow dramatically in the animation.
+  </div>
+
+  <div class="ocard" style="--oc:#f87171;">
+    <div class="oname">RMSProp</div>
+    <div class="ofix">Fixes: Adagrad's vanishing learning rate — uses exponential moving average instead</div>
+    <div class="ocode">
+<span class="kw">E</span>  = β·E + (1−β)·(∇L)²   <span class="cm"># exponential moving avg — forgets old history</span>
+<span class="kw">w</span>  = w − (lr / √(E+ε)) · ∇L
+    </div>
+    <div class="params"><span class="param">lr ≈ 0.001</span><span class="param">β = 0.9</span><span class="param">ε = 1e-8</span></div>
+  </div>
+
+  <p>RMSProp replaces Adagrad's forever-growing sum with an exponential moving average of squared gradients. Old gradient history decays away, so G reflects <em>recent</em> gradient magnitudes, not all-time ones. The effective learning rate stabilises rather than vanishing. Proposed by Geoff Hinton in a Coursera lecture — famously one of the most-cited unpublished works in deep learning.</p>
+
+  <div class="ocard" style="--oc:#3ecf8e;">
+    <div class="oname">Adam — Adaptive Moment Estimation</div>
+    <div class="ofix">Fixes: combines momentum + RMSProp, adds bias correction for initialisation</div>
+    <div class="ocode">
+<span class="kw">m</span>  = β₁·m + (1−β₁)·∇L       <span class="cm"># 1st moment: mean of gradients (momentum)</span>
+<span class="kw">v</span>  = β₂·v + (1−β₂)·(∇L)²    <span class="cm"># 2nd moment: mean of sq. gradients (RMSProp)</span>
+<span class="kw">m̂</span>  = m / (1 − β₁ᵗ)            <span class="cm"># bias correction (t = step number)</span>
+<span class="kw">v̂</span>  = v / (1 − β₂ᵗ)            <span class="cm"># bias correction</span>
+<span class="kw">w</span>  = w − lr · m̂ / (√v̂ + ε)
+    </div>
+    <div class="params"><span class="param">lr ≈ 3e-4</span><span class="param">β₁ = 0.9</span><span class="param">β₂ = 0.999</span><span class="param">ε = 1e-8</span></div>
+  </div>
+
+  <p>Adam maintains two running averages: <code>m</code> (first moment — mean of gradients, like Momentum's velocity) and <code>v</code> (second moment — mean of squared gradients, like RMSProp's E). It also adds <em>bias correction</em>: both m and v start at zero, which biases early estimates downward. Dividing by <code>(1 − β^t)</code> corrects for this. The result is fast, stable, per-parameter adaptive convergence — the default optimizer for virtually all LLM training.</p>
+
+  <div class="ocard" style="--oc:#a78bfa;">
+    <div class="oname">AdamW</div>
+    <div class="ofix">Fixes: Adam's weight decay is distorted by the adaptive learning rate — decouples it</div>
+    <div class="ocode">
+<span class="cm"># same m, v, m̂, v̂ update as Adam, then:</span>
+<span class="kw">w</span>  = w·(1 − lr·λ) − lr · m̂ / (√v̂ + ε)
+      <span class="cm"># ↑ weight decay applied directly to w, not via the gradient</span>
+    </div>
+    <div class="params"><span class="param">lr ≈ 3e-4</span><span class="param">β₁ = 0.9</span><span class="param">β₂ = 0.999</span><span class="param">λ = 0.1</span></div>
+  </div>
+
+  <p>In standard Adam, adding L2 regularisation means the regularisation term gets scaled by the adaptive learning rate <code>1/√v̂</code> — making the effective weight decay vary unpredictably per weight. AdamW decouples weight decay by applying it directly to the weights <em>before</em> the gradient step, so regularisation behaves uniformly regardless of each weight's gradient history. AdamW is the standard optimizer for transformer training (GPT, LLaMA, Mistral etc.).</p>
+
+  <h2>The progression at a glance</h2>
+  <dl class="key-concept">
+    <dt>SGD</dt><dd>Baseline. Subtract lr × gradient. Simple but sensitive to lr choice and oscillates in narrow valleys.</dd>
+    <dt>+ Momentum</dt><dd>Add velocity accumulation. Smooths oscillation, accelerates in consistent directions.</dd>
+    <dt>+ Adagrad</dt><dd>Per-weight adaptive lr scaled by cumulative gradient history. Lr eventually dies.</dd>
+    <dt>+ RMSProp</dt><dd>Replace cumulative sum with exponential moving average. Lr stabilises.</dd>
+    <dt>= Adam</dt><dd>Momentum + RMSProp + bias correction. Fast, robust, near-universal default.</dd>
+    <dt>→ AdamW</dt><dd>Adam with decoupled weight decay. Better regularisation, used for all modern LLMs.</dd>
+  </dl>
+
+  <div class="card-green">
+    <strong>In practice:</strong> AdamW with a cosine learning rate schedule (warm-up for ~1–2% of steps, then decay to ~10% of peak lr) is the recipe used for GPT-3, LLaMA, Mistral, and most other large models. The typical hyperparameters are β₁ = 0.9, β₂ = 0.95 (slightly lower than Adam's default 0.999 for stability at large batch sizes), and weight decay λ = 0.1.
+  </div>
+
+</div>
+
+<script>
+(function(){
+const W=640,H=280,CX=320,CY=140,SC=62;
+const dark=window.matchMedia('(prefers-color-scheme:dark)').matches;
+function lf(x,y){return .5*x*x+5*y*y;}
+function gf(x,y){return[x,10*y];}
+const X0=2.5,Y0=0.8,NS=60;
+const OPTS=[
+  {n:'Momentum',c:'#4a9eff'},
+  {n:'Adagrad', c:'#f59e0b'},
+  {n:'RMSProp', c:'#f87171'},
+  {n:'Adam',    c:'#3ecf8e'},
+  {n:'AdamW',   c:'#a78bfa'},
+];
+const vis={};OPTS.forEach(o=>vis[o.n]=true);
+
+function run(name){
+  let x=X0,y=Y0,s={},p=[[x,y]];
+  for(let i=0;i<NS;i++){
+    const[gx,gy]=gf(x,y);
+    if(name==='Momentum'){
+      const lr=.06,b=.9;
+      s.vx=b*(s.vx||0)+lr*gx;s.vy=b*(s.vy||0)+lr*gy;
+      x-=s.vx;y-=s.vy;
+    }else if(name==='Adagrad'){
+      const lr=.7,e=1e-8;
+      s.Gx=(s.Gx||0)+gx*gx;s.Gy=(s.Gy||0)+gy*gy;
+      x-=lr/Math.sqrt(s.Gx+e)*gx;y-=lr/Math.sqrt(s.Gy+e)*gy;
+    }else if(name==='RMSProp'){
+      const lr=.15,b=.9,e=1e-8;
+      s.Ex=b*(s.Ex||0)+(1-b)*gx*gx;s.Ey=b*(s.Ey||0)+(1-b)*gy*gy;
+      x-=lr/Math.sqrt(s.Ex+e)*gx;y-=lr/Math.sqrt(s.Ey+e)*gy;
+    }else if(name==='Adam'||name==='AdamW'){
+      const lr=.25,b1=.9,b2=.999,e=1e-8,wd=name==='AdamW'?.05:0;
+      s.t=(s.t||0)+1;
+      s.mx=b1*(s.mx||0)+(1-b1)*gx;s.my=b1*(s.my||0)+(1-b1)*gy;
+      s.vx=b2*(s.vx||0)+(1-b2)*gx*gx;s.vy=b2*(s.vy||0)+(1-b2)*gy*gy;
+      const mxh=s.mx/(1-b1**s.t),myh=s.my/(1-b1**s.t);
+      const vxh=s.vx/(1-b2**s.t),vyh=s.vy/(1-b2**s.t);
+      x=x*(1-lr*wd)-lr*mxh/Math.sqrt(vxh+e);
+      y=y*(1-lr*wd)-lr*myh/Math.sqrt(vyh+e);
+    }
+    p.push([x,y]);
+  }
+  return p;
+}
+const PATHS={};OPTS.forEach(o=>PATHS[o.n]=run(o.n));
+
+const canvas=document.getElementById('cv');
+const ctx=canvas.getContext('2d');
+function sc(x,y){return[CX+x*SC,CY-y*SC];}
+
+function drawBg(){
+  const lvls=[22,14,8,4.5,2.2,1,.4,.12,.025];
+  lvls.forEach((c,i)=>{
+    const ax=Math.sqrt(2*c)*SC,ay=Math.sqrt(c/5)*SC;
+    const t=i/(lvls.length-1);
+    ctx.fillStyle=dark
+      ?`rgb(${Math.round(15+t*20)},${Math.round(19+t*24)},${Math.round(27+t*33)})`
+      :`rgb(${Math.round(200+t*50)},${Math.round(212+t*38)},${Math.round(228+t*22)})`;
+    ctx.beginPath();ctx.ellipse(CX,CY,Math.max(ax,1),Math.max(ay,1),0,0,Math.PI*2);ctx.fill();
+  });
+  ctx.fillStyle=dark?'rgba(255,255,255,.4)':'rgba(0,0,0,.22)';
+  ctx.beginPath();ctx.arc(CX,CY,3.5,0,Math.PI*2);ctx.fill();
+  const[sx,sy]=sc(X0,Y0);
+  ctx.fillStyle=dark?'rgba(255,255,255,.35)':'rgba(0,0,0,.2)';
+  ctx.fillRect(sx-3.5,sy-3.5,7,7);
+}
+
+function drawPaths(step){
+  OPTS.forEach(({n,c})=>{
+    if(!vis[n])return;
+    const p=PATHS[n],end=Math.min(step+1,p.length);
+    ctx.strokeStyle=c;ctx.lineWidth=2;ctx.lineJoin='round';ctx.lineCap='round';
+    ctx.globalAlpha=.9;
+    ctx.beginPath();
+    p.slice(0,end).forEach(([x,y],i)=>{
+      const[px,py]=sc(x,y);i?ctx.lineTo(px,py):ctx.moveTo(px,py);
+    });
+    ctx.stroke();ctx.globalAlpha=1;
+    const[px,py]=sc(p[end-1][0],p[end-1][1]);
+    ctx.fillStyle=c;ctx.beginPath();ctx.arc(px,py,5,0,Math.PI*2);ctx.fill();
+  });
+}
+
+function updLoss(step){
+  document.getElementById('ld').innerHTML=OPTS.map(({n,c})=>{
+    const[x,y]=PATHS[n][Math.min(step,NS)];
+    return`<div class="lcell" style="border-color:${c}55;background:${c}12;">
+      <div class="lname" style="color:${c};">${n}</div>
+      <div class="lval">${lf(x,y).toFixed(4)}</div>
+    </div>`;
+  }).join('');
+}
+
+function render(s){
+  ctx.clearRect(0,0,W,H);drawBg();drawPaths(s);
+  document.getElementById('sn').textContent=s;updLoss(s);
+}
+
+let step=0,playing=true,timer;
+function tick(){
+  if(step<NS){step++;render(step);timer=setTimeout(tick,90);}
+  else{playing=false;document.getElementById('pb').textContent='↺ Replay';}
+}
+function doReset(){
+  clearTimeout(timer);step=0;playing=true;
+  document.getElementById('pb').textContent='⏸ Pause';
+  render(0);setTimeout(tick,500);
+}
+function doPlay(){
+  if(step>=NS){doReset();return;}
+  playing=!playing;
+  document.getElementById('pb').textContent=playing?'⏸ Pause':'▶ Play';
+  playing?tick():clearTimeout(timer);
+}
+window.doReset=doReset;window.doPlay=doPlay;
+
+const tg=document.getElementById('tg');
+OPTS.forEach(({n,c})=>{
+  const b=document.createElement('button');
+  b.className='tog on';b.textContent=n;
+  b.style.cssText=`color:${c};border-color:${c};`;
+  b.onclick=()=>{vis[n]=!vis[n];b.className='tog '+(vis[n]?'on':'off');render(step);};
+  tg.appendChild(b);
+});
+render(0);setTimeout(tick,700);
+})();
+</script>
+</body>
+</html>

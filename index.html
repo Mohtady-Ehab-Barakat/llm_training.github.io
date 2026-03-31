@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLM Course Notes</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .note-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 8px;
+  }
+  @media (max-width: 560px) { .note-grid { grid-template-columns: 1fr; } }
+
+  .note-card {
+    background: var(--bg2);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 20px 22px;
+    display: block;
+    text-decoration: none;
+    transition: border-color 0.15s, background 0.15s;
+    position: relative;
+    overflow: hidden;
+  }
+  .note-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--card-accent, var(--accent));
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .note-card:hover { background: var(--bg3); border-color: #3a4050; text-decoration: none; }
+  .note-card:hover::before { opacity: 1; }
+
+  .note-num {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  .note-title {
+    font-family: var(--mono);
+    font-size: 15px;
+    font-weight: 500;
+    color: #eef0f4;
+    margin-bottom: 8px;
+    line-height: 1.4;
+  }
+  .note-desc {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.55;
+  }
+  .note-topics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 14px;
+  }
+  .topic-pill {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: var(--bg3);
+    border: 0.5px solid var(--border);
+    color: var(--muted);
+    letter-spacing: 0.03em;
+  }
+  .note-arrow {
+    position: absolute;
+    bottom: 18px; right: 20px;
+    font-size: 16px;
+    color: var(--muted);
+    transition: color 0.15s, transform 0.15s;
+  }
+  .note-card:hover .note-arrow { color: var(--accent); transform: translate(2px, -2px); }
+
+  .hero-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 16px;
+  }
+
+  .page-title {
+    font-family: var(--mono);
+    font-size: 36px;
+    font-weight: 500;
+    color: #eef0f4;
+    line-height: 1.2;
+    margin-bottom: 12px;
+  }
+  .add-note {
+    border: 0.5px dashed var(--border);
+    border-radius: var(--radius-lg);
+    padding: 20px 22px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .add-icon {
+    width: 28px; height: 28px; border-radius: 6px;
+    background: var(--bg3); border: 0.5px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; color: var(--muted); flex-shrink: 0;
+  }
+</style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <div class="hero-label">Interactive study notes</div>
+  <div class="page-title">LLM Course</div>
+  <p class="subtitle" style="margin-bottom:40px;">Notes with interactive examples. Open any topic below.</p>
+
+  <h3>Topics</h3>
+
+  <div class="note-grid">
+
+    <a class="note-card" href="01_float_formats.html" style="--card-accent: #4a9eff;">
+      <div class="note-num">01</div>
+      <div class="note-title">Floating Point Formats</div>
+      <div class="note-desc">float32, float16, bfloat16 — exponent vs fraction bits and why it matters for training.</div>
+      <div class="note-topics">
+        <span class="topic-pill">float32</span>
+        <span class="topic-pill">float16</span>
+        <span class="topic-pill">bfloat16</span>
+        <span class="topic-pill">dynamic range</span>
+      </div>
+      <div class="note-arrow">↗</div>
+    </a>
+
+    <a class="note-card" href="02_tensor_contiguity.html" style="--card-accent: #3ecf8e;">
+      <div class="note-num">02</div>
+      <div class="note-title">Contiguous & Non-Contiguous Tensors</div>
+      <div class="note-desc">How tensors live in memory, what strides are, and why .T breaks contiguity.</div>
+      <div class="note-topics">
+        <span class="topic-pill">tensors</span>
+        <span class="topic-pill">strides</span>
+        <span class="topic-pill">memory layout</span>
+        <span class="topic-pill">PyTorch</span>
+      </div>
+      <div class="note-arrow">↗</div>
+    </a>
+
+    <a class="note-card" href="03_sparsity.html" style="--card-accent: #f59e0b;">
+      <div class="note-num">03</div>
+      <div class="note-title">Sparsity in LLM training</div>
+      <div class="note-desc">Sparse matrices, the FLOP formula with/without sparsity, and how GPUs exploit structured zeros.</div>
+      <div class="note-topics">
+        <span class="topic-pill">sparsity</span>
+        <span class="topic-pill">FLOPs</span>
+        <span class="topic-pill">pruning</span>
+        <span class="topic-pill">2:4 sparse</span>
+      </div>
+      <div class="note-arrow">↗</div>
+    </a>
+
+    <a class="note-card" href="04_optimizers.html" style="--card-accent: #a78bfa;">
+      <div class="note-num">04</div>
+      <div class="note-title">Optimizers</div>
+      <div class="note-desc">Momentum, Adagrad, RMSProp, Adam, AdamW — the evolution of optimizers and what each one fixes.</div>
+      <div class="note-topics">
+        <span class="topic-pill">Adam</span>
+        <span class="topic-pill">AdamW</span>
+        <span class="topic-pill">momentum</span>
+        <span class="topic-pill">loss surface</span>
+      </div>
+      <div class="note-arrow">↗</div>
+    </a>
+
+    <a class="note-card" href="05_transformers.html" style="--card-accent: #378ADD;">
+      <div class="note-num">05</div>
+      <div class="note-title">Transformer blocks — deep dive</div>
+      <div class="note-desc">Every block explained: embedding, attention, Add & Norm, FFN, softmax — input/output shapes and formulas.</div>
+      <div class="note-topics">
+        <span class="topic-pill">attention</span>
+        <span class="topic-pill">LayerNorm</span>
+        <span class="topic-pill">FFN</span>
+        <span class="topic-pill">softmax</span>
+      </div>
+      <div class="note-arrow">↗</div>
+    </a>
+
+    <div class="add-note">
+      <div class="add-icon">+</div>
+      <div>Add the next topic here — duplicate an existing file and link it from this index.</div>
+    </div>
+
+  </div>
+
+</div>
+</body>
+</html>

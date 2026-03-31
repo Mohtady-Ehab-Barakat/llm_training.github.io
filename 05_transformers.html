@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>05 — Transformer Blocks · LLM Notes</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .explorer { display: flex; gap: 20px; align-items: flex-start; margin-top: 4px; }
+  @media(max-width:600px){ .explorer { flex-direction: column; } }
+
+  .arch-col { width: 160px; flex-shrink: 0; }
+  .detail-col { flex: 1; min-width: 0; }
+
+  .blk {
+    padding: 8px 10px; border-radius: 6px; cursor: pointer;
+    font-size: 12px; font-weight: 500; text-align: center;
+    border: 1.5px solid var(--border);
+    background: var(--bg2); color: var(--muted);
+    transition: all .15s; user-select: none; line-height: 1.35;
+  }
+  .blk:hover { background: var(--bg3); color: var(--text); }
+  .blk.sel { background: var(--bg3); }
+
+  .connector { width: 2px; height: 14px; margin: 3px auto; background: var(--border); }
+  .connector-sm { width: 2px; height: 8px; margin: 2px auto; background: var(--border); opacity: 0.5; }
+
+  .repeat-box {
+    border: 1px dashed var(--border); border-radius: 8px;
+    padding: 8px 6px 8px;
+  }
+  .repeat-lbl {
+    font-family: var(--mono); font-size: 10px; color: var(--muted);
+    text-align: right; display: block; margin-bottom: 6px;
+  }
+
+  .shape-row { display: flex; align-items: stretch; gap: 8px; margin: 12px 0; }
+  .shape-box {
+    flex: 1; background: var(--bg3); border: 0.5px solid var(--border);
+    border-radius: var(--radius); padding: 10px 12px; text-align: center;
+  }
+  .shape-val { font-family: var(--mono); font-size: 14px; font-weight: 500; color: var(--text); }
+  .shape-desc { font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .shape-arrow { font-size: 22px; color: var(--muted); flex-shrink: 0; display: flex; align-items: center; }
+
+  .formula {
+    font-family: var(--mono); font-size: 12px; line-height: 2;
+    background: var(--bg3); border: 0.5px solid var(--border);
+    border-radius: var(--radius); padding: 12px 16px;
+    color: var(--text); white-space: pre; overflow-x: auto; margin: 12px 0;
+  }
+  .formula .cm { color: var(--muted); }
+
+  .insight {
+    border-radius: 0 var(--radius) var(--radius) 0;
+    padding: 12px 16px; font-size: 13px; color: var(--muted);
+    line-height: 1.7; margin-top: 4px;
+    border-top: 0.5px solid var(--border);
+    border-right: 0.5px solid var(--border);
+    border-bottom: 0.5px solid var(--border);
+  }
+
+  .param-line {
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    margin-top: 10px; padding-top: 8px; border-top: 0.5px solid var(--border);
+  }
+  .param-line span { color: var(--text); }
+
+  .detail-name { font-size: 15px; font-weight: 500; color: var(--text); margin-bottom: 4px; }
+  .detail-tag {
+    display: inline-block; font-size: 10px; font-weight: 500; letter-spacing: .06em;
+    text-transform: uppercase; border-radius: 4px; padding: 2px 8px;
+    margin-bottom: 12px; border: 0.5px solid;
+  }
+
+  .placeholder {
+    font-size: 13px; color: var(--muted); padding: 48px 0; text-align: center;
+  }
+</style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <nav class="nav">
+    <a class="nav-home" href="index.html">← LLM Notes</a>
+    <span class="nav-title">05 / Transformer blocks</span>
+  </nav>
+
+  <div class="page-header">
+    <div class="tag">Architecture</div>
+    <h1>Transformer blocks — deep dive</h1>
+    <p class="subtitle">Every block explained: input shape · formula · what it does · parameter count</p>
+  </div>
+
+  <p>A transformer stacks N identical blocks between an input embedding stage and an output projection. Click any block in the architecture on the left to see exactly what goes in, what comes out, and why it exists.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">Click any block to explore it</div>
+    <div class="explorer">
+      <div class="arch-col" id="arch-col"></div>
+      <div class="detail-col" id="detail-col"><div class="placeholder">← click any block</div></div>
+    </div>
+  </div>
+
+  <h2>The full flow — narrative</h2>
+
+  <h3>Input stage</h3>
+  <p>Raw text is first split into tokens (subwords) and each is mapped to an integer ID. The <strong>token embedding</strong> table converts these IDs into D-dimensional float vectors — a simple lookup, no math. A <strong>positional encoding</strong> is then added element-wise to inject order, because attention has no built-in notion of sequence position.</p>
+
+  <h3>Inside each transformer block (repeated N times)</h3>
+  <p><strong>Multi-head self-attention</strong> lets every token look at every other token. Each token produces a Query (what I need), Key (what I have), and Value (what I contribute). Dot products between Qs and Ks produce attention scores; softmax normalises them; multiplying by Vs blends the information. This runs H times in parallel with different learned projections — each head learns a different type of relationship. A causal mask sets future positions to −∞ so training on language modelling can't look ahead.</p>
+
+  <p>The first <strong>Add &amp; Norm</strong> adds the original input back (residual connection) then normalises each token's vector to zero-mean unit-variance (LayerNorm). The residual is why 100-layer networks can be trained — gradients flow straight back without vanishing.</p>
+
+  <p>The <strong>feed forward network</strong> operates on each token independently (no cross-token mixing here). Two linear layers with a GELU activation expand to 4D then contract back to D. This is where factual knowledge is believed to be stored — each FFN layer acts like a differentiable key-value memory. The second <strong>Add &amp; Norm</strong> wraps the FFN with the same residual + normalisation pattern.</p>
+
+  <h3>Output stage</h3>
+  <p>The <strong>linear (LM head)</strong> projects from D up to vocabulary size V, producing one raw score (logit) per possible next token. Most models share this weight matrix with the embedding table — it saves D×V parameters and works because both encode the same semantics. <strong>Softmax</strong> converts the logits into probabilities. During training, cross-entropy loss pushes up the probability of the correct next token. During inference, you sample from this distribution — temperature τ controls how flat or peaked it is.</p>
+
+  <div class="card-accent">
+    <strong>Pre-norm vs post-norm:</strong> The original "Attention is All You Need" paper applied LayerNorm after the residual addition (post-norm). Modern LLMs (LLaMA, Mistral, GPT-4) apply it before the sub-layer (pre-norm). Pre-norm trains more stably at large scale and doesn't need learning rate warm-up tricks.
+  </div>
+
+  <h2>Shapes through the whole network</h2>
+  <p>For a GPT-2 sized model: B = batch size, T = sequence length (1024), D = 768, H = 12 heads, V = 50,257, N = 12 layers.</p>
+
+  <dl class="key-concept">
+    <dt>Input</dt><dd>[B, T] — integer token IDs</dd>
+    <dt>After embed + pos</dt><dd>[B, T, D] — float vectors, this shape persists through all N blocks</dd>
+    <dt>Inside attn (QKV)</dt><dd>[B, H, T, D/H] — split across heads</dd>
+    <dt>Attn scores</dt><dd>[B, H, T, T] — every token attending to every token</dd>
+    <dt>After LM head</dt><dd>[B, T, V] — one score per vocab token, per position</dd>
+    <dt>After softmax</dt><dd>[B, T, V] — probabilities summing to 1 at each position</dd>
+  </dl>
+
+  <h2>Where the parameters live</h2>
+  <dl class="key-concept">
+    <dt>Embedding</dt><dd>V × D ≈ 38M (GPT-2). Or 0 if weight-tied with LM head.</dd>
+    <dt>Attention</dt><dd>4 × D² per block (Wq, Wk, Wv, Wo). 12 blocks × 4 × 768² ≈ 28M.</dd>
+    <dt>FFN</dt><dd>8 × D² per block (W1: D→4D, W2: 4D→D). 12 blocks × 8 × 768² ≈ 57M.</dd>
+    <dt>LayerNorm</dt><dd>4 × D per block (γ and β, twice). Tiny.</dd>
+    <dt>LM head</dt><dd>D × V ≈ 38M. Usually weight-tied → free.</dd>
+  </dl>
+
+</div>
+
+<script>
+const C = {
+  input: '#7F77DD',
+  attn:  '#378ADD',
+  norm:  '#1D9E75',
+  ffn:   '#BA7517',
+  out:   '#993C1D',
+};
+
+const BLOCKS = [
+  { id:'embed', name:'Token embedding', cat:'input',
+    in:'[B, T]', inD:'integer token IDs',
+    out:'[B, T, D]', outD:'D-dim float vectors',
+    formula:
+`E = EmbedTable[tokens]
+# EmbedTable: [V, D]
+# V = vocab size  (e.g. 50,257)
+# D = model dim   (e.g.    768)
+# No math — pure table lookup`,
+    insight:'Maps each integer token ID to a learned D-dimensional float vector. The embedding table is V rows × D columns — you retrieve row i for token i. These vectors are learned by gradient descent. Tokens with similar meanings end up geometrically close in D-dimensional space.',
+    params:'V × D  (e.g. 50,257 × 768 ≈ 38M)' },
+
+  { id:'posenc', name:'Positional encoding', cat:'input',
+    in:'[B, T, D]', inD:'token embeddings (no position yet)',
+    out:'[B, T, D]', outD:'position-aware token vectors',
+    formula:
+`x = token_emb + pos_emb
+# pos_emb: [T_max, D]
+# each position has a unique
+# D-dim vector — element-wise add
+# shape is unchanged`,
+    insight:'Attention is permutation-invariant — "cat sat the" looks identical to "the cat sat" without position info. Positional encodings inject order by adding a unique vector per position. GPT uses learned vectors. LLaMA/Mistral use RoPE, which encodes position as a rotation applied to Q and K inside attention itself.',
+    params:'T_max × D (if learned, e.g. 1024 × 768 ≈ 786K)' },
+
+  { id:'attn', name:'Multi-head self-attention', cat:'attn',
+    in:'[B, T, D]', inD:'token representations',
+    out:'[B, T, D]', outD:'context-enriched vectors',
+    formula:
+`Q = x·Wq;  K = x·Wk;  V = x·Wv
+# [B,T,D] → [B,T,D] each
+
+# split into H heads → [B,H,T,D/H]
+
+scores  = Q·Kᵀ / sqrt(D/H)
+#       [B,H,T,T] — every token × every token
+scores += causal_mask  # -inf above diagonal
+weights = softmax(scores)     # [B,H,T,T]
+ctx     = weights · V         # [B,H,T,D/H]
+
+out = concat(heads) · Wo     # [B,T,D]`,
+    insight:'Q = "what I need", K = "what I contain", V = "what I contribute". Q·Kᵀ scores compatibility between every pair of tokens. Dividing by sqrt(D/H) prevents dot products growing so large that softmax saturates. Causal mask makes future positions invisible. Each of H heads runs independently — heads specialise in different patterns: syntax, coreference, position.',
+    params:'4 × D²  (Wq, Wk, Wv, Wo — each D×D)' },
+
+  { id:'addnorm1', name:'Add & Norm (after attn)', cat:'norm',
+    in:'x  +  attn_output', inD:'residual + attention output',
+    out:'[B, T, D]', outD:'normalised, residual-added',
+    formula:
+`x = x + attn_output     # residual add
+
+# LayerNorm across D, per token:
+μ = mean(x, dim=D)
+σ = std(x,  dim=D)
+x = (x - μ) / (σ + ε)  # zero-mean, unit-var
+x = γ·x + β             # learned scale+shift`,
+    insight:'Two operations fused. The residual connection (x + attn_output) is a gradient highway — errors flow straight back without vanishing, enabling deep stacks to train. LayerNorm rescales each token\'s D-dim vector to zero-mean unit-variance, preventing activations from exploding or collapsing. γ and β are learned per dimension.',
+    params:'2 × D  (γ and β, both learned)' },
+
+  { id:'ffn', name:'Feed forward network', cat:'ffn',
+    in:'[B, T, D]', inD:'per-token vectors (no cross-token)',
+    out:'[B, T, D]', outD:'richer per-token representations',
+    formula:
+`h   = GELU( x·W1 + b1 )
+#     [B,T,D] → [B,T,4D]
+
+out = h·W2 + b2
+#     [B,T,4D] → [B,T,D]
+
+# Tokens do NOT interact here.
+# Each token is processed fully
+# independently of all others.`,
+    insight:'Two linear layers with GELU activation, applied identically to every token. The 4× expansion (e.g. 768→3072) provides per-token depth. Attention mixes information across positions; FFN reasons over the blended signal. Research suggests factual knowledge (dates, capitals, associations) is stored here — each FFN acts like a differentiable key-value memory bank.',
+    params:'8D² + 8D  (W1: D×4D, W2: 4D×D, plus biases)' },
+
+  { id:'addnorm2', name:'Add & Norm (after FFN)', cat:'norm',
+    in:'x  +  ffn_output', inD:'residual + FFN output',
+    out:'[B, T, D]', outD:'output of this transformer block',
+    formula:
+`x = x + ffn_output      # residual add
+
+# LayerNorm — identical to above:
+μ = mean(x, dim=D)
+σ = std(x,  dim=D)
+x = (x - μ) / (σ + ε)
+x = γ·x + β`,
+    insight:'Identical structure to Add & Norm (1) — residual then LayerNorm — but wrapping the FFN. Each transformer block has exactly two of these. Note: modern LLMs (LLaMA, Mistral) use pre-norm — LayerNorm is applied before the sub-layer, not after. Pre-norm trains more stably at large scale and doesn\'t need warm-up tricks.',
+    params:'2 × D  (γ and β)' },
+
+  { id:'linear', name:'Linear  (LM head)', cat:'out',
+    in:'[B, T, D]', inD:'final transformer output',
+    out:'[B, T, V]', outD:'raw score per vocab token',
+    formula:
+`logits = x · W_head
+# W_head: [D, V]
+# output: [B, T, V]
+
+# Weight tying (very common):
+#   W_head = EmbedTable.T
+# Saves D×V params — works because
+# both encode the same token semantics`,
+    insight:'Projects from D up to V, producing one raw score (logit) per possible next token at every position. Logits are unbounded reals — large positive = likely, large negative = unlikely. Weight tying shares this matrix with the embedding table (transposed); the embedding maps tokens→vectors and the LM head maps vectors→token scores — both encode the same semantic space.',
+    params:'D × V ≈ 38M (GPT-2), or 0 if weight-tied' },
+
+  { id:'softmax', name:'Softmax', cat:'out',
+    in:'[B, T, V]', inD:'raw logits (any real number)',
+    out:'[B, T, V]', outD:'probabilities, sum to 1.0',
+    formula:
+`p(i) = exp(zi) / Σⱼ exp(zj)
+
+# Temperature τ controls randomness:
+p(i) = exp(zi/τ) / Σⱼ exp(zj/τ)
+
+# τ = 1.0  → standard
+# τ > 1.0  → flatter  (more random)
+# τ < 1.0  → sharper  (more confident)
+# τ → 0    → argmax   (greedy)`,
+    insight:'Converts logits into a proper probability distribution. exp() makes everything positive; dividing by the sum makes them sum to 1. During training: cross-entropy loss = -log(p(correct token)) — backprop pushes the correct token\'s probability up. During inference: sample from this distribution, or take argmax. Temperature is the primary dial for controlling generation creativity without retraining.',
+    params:'0 — no learned parameters' },
+];
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function renderFormula(f) {
+  return f.split('\n').map(line => {
+    const ci = line.indexOf('#');
+    if (ci >= 0) {
+      return escHtml(line.slice(0, ci)) +
+        '<span class="cm">' + escHtml(line.slice(ci)) + '</span>';
+    }
+    return escHtml(line);
+  }).join('\n');
+}
+
+function buildArch() {
+  const col = document.getElementById('arch-col');
+  const items = [
+    { type:'block', id:'embed' },
+    { type:'conn' },
+    { type:'block', id:'posenc' },
+    { type:'conn' },
+    { type:'repeat-start' },
+    { type:'block', id:'attn' },
+    { type:'conn-sm' },
+    { type:'block', id:'addnorm1' },
+    { type:'conn-sm' },
+    { type:'block', id:'ffn' },
+    { type:'conn-sm' },
+    { type:'block', id:'addnorm2' },
+    { type:'repeat-end' },
+    { type:'conn' },
+    { type:'block', id:'linear' },
+    { type:'conn' },
+    { type:'block', id:'softmax' },
+  ];
+
+  let html = '';
+  let inRepeat = false;
+  items.forEach(item => {
+    if (item.type === 'block') {
+      const d = BLOCKS.find(b => b.id === item.id);
+      const c = C[d.cat];
+      html += `<div class="blk" id="blk-${d.id}" style="border-color:${c}33;" onclick="selectBlock('${d.id}')">${d.name}</div>`;
+    } else if (item.type === 'conn') {
+      html += '<div class="connector"></div>';
+    } else if (item.type === 'conn-sm') {
+      html += '<div class="connector-sm"></div>';
+    } else if (item.type === 'repeat-start') {
+      html += '<div class="connector"></div><div class="repeat-box"><span class="repeat-lbl">× N blocks</span>';
+      inRepeat = true;
+    } else if (item.type === 'repeat-end') {
+      html += '</div>';
+      inRepeat = false;
+    }
+  });
+  col.innerHTML = html;
+}
+
+function selectBlock(id) {
+  document.querySelectorAll('.blk').forEach(b => {
+    b.classList.remove('sel');
+    b.style.color = '';
+    b.style.background = '';
+  });
+
+  const d = BLOCKS.find(b => b.id === id);
+  const c = C[d.cat];
+  const el = document.getElementById('blk-' + id);
+  if (el) {
+    el.classList.add('sel');
+    el.style.color = c;
+    el.style.borderColor = c;
+    el.style.background = 'var(--bg3)';
+  }
+
+  document.getElementById('detail-col').innerHTML = `
+    <div class="detail-name">${d.name}</div>
+    <div class="detail-tag" style="color:${c};border-color:${c};">${d.cat}</div>
+
+    <div class="shape-row">
+      <div class="shape-box">
+        <div class="shape-val">${d.in}</div>
+        <div class="shape-desc">${d.inD}</div>
+      </div>
+      <div class="shape-arrow">→</div>
+      <div class="shape-box">
+        <div class="shape-val">${d.out}</div>
+        <div class="shape-desc">${d.outD}</div>
+      </div>
+    </div>
+
+    <div class="formula">${renderFormula(d.formula)}</div>
+
+    <div class="insight" style="border-left:3px solid ${c};">${d.insight}</div>
+
+    <div class="param-line">Parameters: <span>${d.params}</span></div>
+  `;
+}
+
+buildArch();
+selectBlock('embed');
+</script>
+</body>
+</html>

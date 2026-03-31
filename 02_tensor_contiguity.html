@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>02 — Tensor Contiguity · LLM Notes</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .tab-row { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+  .tab {
+    padding: 7px 16px; border-radius: 6px; font-family: var(--mono);
+    font-size: 12px; font-weight: 500; cursor: pointer;
+    border: 0.5px solid var(--border);
+    background: var(--bg3); color: var(--muted);
+    transition: all 0.15s;
+  }
+  .tab.active { background: #0C2244; border-color: #185FA5; color: #85B7EB; }
+
+  .two-col { display: flex; gap: 28px; flex-wrap: wrap; align-items: flex-start; }
+
+  .tensor-grid { display: inline-grid; gap: 4px; }
+  .tcell {
+    width: 50px; height: 42px; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-size: 13px; font-weight: 500;
+    cursor: pointer; border: 0.5px solid var(--border);
+    background: var(--bg3); color: var(--text);
+    transition: background 0.15s, border-color 0.15s;
+    user-select: none;
+  }
+  .tcell:hover { border-color: #3a4050; background: var(--bg2); }
+  .tcell.sel { background: #0C2244; border-color: #185FA5; color: #85B7EB; }
+
+  .mem-strip { display: flex; gap: 3px; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
+  .mcell {
+    width: 36px; height: 36px; border-radius: 5px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-size: 12px; font-weight: 500;
+    border: 0.5px solid var(--border);
+    background: var(--bg3); color: var(--muted);
+    transition: background 0.2s, color 0.2s, border-color 0.2s;
+  }
+  .mcell.active { background: #0C2244; border-color: #185FA5; color: #85B7EB; }
+  .mcell.highlighted { background: #04342C; border-color: #0F6E56; color: #5DCAA5; }
+  .mcell.gap { background: var(--bg); border-color: var(--bg3); color: var(--bg3); }
+  .maddr { width: 36px; flex-shrink: 0; font-family: var(--mono); font-size: 10px; color: var(--muted); text-align: center; }
+
+  .access-strip { display: flex; gap: 3px; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; margin-top: 8px; align-items: center; }
+  .acell {
+    width: 30px; height: 28px; border-radius: 4px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-size: 11px; font-weight: 500;
+    border: 0.5px solid var(--border); background: var(--bg3); color: var(--text);
+  }
+  .acell.hl { background: #04342C; border-color: #0F6E56; color: #5DCAA5; }
+  .ajump { font-family: var(--mono); font-size: 10px; color: var(--muted); flex-shrink: 0; padding: 0 2px; white-space: nowrap; }
+  .ajump.far { color: var(--danger); }
+
+  .chip-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+  .chip {
+    font-family: var(--mono); font-size: 12px;
+    background: var(--bg3); border: 0.5px solid var(--border);
+    border-radius: 5px; padding: 5px 10px; color: var(--muted);
+  }
+  .chip span { color: var(--text); }
+
+  .callout-box {
+    background: var(--bg2); border: 0.5px solid var(--border);
+    border-left: 3px solid var(--accent); border-radius: 0 var(--radius) var(--radius) 0;
+    padding: 12px 16px; font-size: 13px; color: var(--muted);
+    line-height: 1.65; margin-top: 14px;
+  }
+  .callout-box strong { color: var(--text); font-weight: 500; }
+  .callout-box code { font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <nav class="nav">
+    <a class="nav-home" href="index.html">← LLM Notes</a>
+    <span class="nav-title" style="font-family:var(--mono);font-size:12px;">02 / Tensor Contiguity</span>
+  </nav>
+
+  <div class="page-header">
+    <div class="tag">Memory layout</div>
+    <h1>Contiguous &amp; Non-Contiguous Tensors</h1>
+    <p class="subtitle">How tensors live in memory — strides, views, and why it matters</p>
+  </div>
+
+  <p>Memory is a flat 1D strip of addresses. A tensor is just a <em>recipe</em> for reading that strip as a multi-dimensional object. The recipe is encoded in three numbers: <strong>shape</strong>, <strong>strides</strong>, and a <strong>storage offset</strong>.</p>
+
+  <h2>Interactive memory explorer</h2>
+  <p>Click any tensor cell to highlight where it lives in raw memory. Switch tabs to see what transpose and slicing actually do to the strides — without copying data.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">Click a tensor cell · switch views</div>
+
+    <div class="tab-row">
+      <div class="tab active" onclick="setMode('contiguous')">Contiguous</div>
+      <div class="tab" onclick="setMode('transposed')">.T (non-contiguous)</div>
+      <div class="tab" onclick="setMode('slice')">[:, 1::2] slice</div>
+    </div>
+
+    <div class="two-col">
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px;">Tensor view</div>
+        <div class="tensor-grid" id="tgrid"></div>
+      </div>
+      <div style="flex:1;min-width:240px;">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px;">Raw memory (flat)</div>
+        <div class="mem-strip" id="mstrip"></div>
+        <div class="mem-strip" id="maddrs"></div>
+        <div style="font-size:11px;color:var(--muted);margin:10px 0 4px;">Access order when iterating row-by-row</div>
+        <div class="access-strip" id="astrip"></div>
+      </div>
+    </div>
+
+    <div class="chip-row" id="chips"></div>
+    <div class="callout-box" id="callout"></div>
+  </div>
+
+  <h2>Key concepts</h2>
+
+  <dl class="key-concept">
+    <dt>Strides</dt><dd>Number of memory cells to skip to advance one step in each dimension. A 3×4 contiguous tensor has strides [4, 1].</dd>
+    <dt>Contiguous</dt><dd>Elements are laid out sequentially in memory — iterating the tensor walks memory in a straight line. Fast for the CPU/GPU cache.</dd>
+    <dt>Non-contiguous</dt><dd>Strides cause memory access to jump around. Created by <code>.T</code>, <code>permute()</code>, slicing with a step, <code>expand()</code>, etc.</dd>
+    <dt>.view()</dt><dd>Requires contiguous memory — will raise an error otherwise.</dd>
+    <dt>.reshape()</dt><dd>Works on non-contiguous tensors but may silently copy data.</dd>
+    <dt>.contiguous()</dt><dd>Forces a copy into a fresh row-major layout. Always contiguous after this.</dd>
+  </dl>
+
+  <h2>Why this matters in LLMs</h2>
+  <p>Attention score computation involves a lot of transposes and permutes. After a <code>.transpose()</code>, the tensor is non-contiguous. If you then call <code>.view()</code> to reshape, PyTorch will throw a <code>RuntimeError</code>. The fix you'll see everywhere in transformer code:</p>
+
+  <pre><code>x = x.transpose(1, 2)   # now non-contiguous
+x = x.contiguous()      # copies to fresh layout
+x = x.view(B, T, C)     # safe to view now</code></pre>
+
+  <div class="card-warn">
+    <code>.contiguous()</code> triggers a memory allocation and copy — it's not free. In tight training loops, it can be a hidden bottleneck. Profile before adding it blindly.
+  </div>
+
+</div>
+
+<script>
+const R0 = 3, C0 = 4, N = R0 * C0;
+const VALS = Array.from({length: N}, (_, i) => i);
+
+let mode = 'contiguous', sel = null;
+
+const MODES = {
+  contiguous: {
+    shape: [3, 4], strides: [4, 1], offset: 0, storageSize: N,
+    chips: [['shape','[3, 4]'],['strides','[4, 1]'],['offset','0'],['is_contiguous()','True']],
+    note: '<strong>Contiguous:</strong> elements are back-to-back in memory (row-major / C order). Moving one column right = jump 1 cell. Moving one row down = jump 4 cells. Iterating walks memory in a straight line — cache-friendly.',
+  },
+  transposed: {
+    shape: [4, 3], strides: [1, 4], offset: 0, storageSize: N,
+    chips: [['shape','[4, 3]'],['strides','[1, 4]'],['offset','0'],['is_contiguous()','False']],
+    note: '<strong>.T does not copy memory.</strong> It just swaps the strides: [4,1] → [1,4]. Moving one column right now jumps 4 cells; moving one row down jumps 1 cell. Same storage, different recipe → non-contiguous. Call <code>.contiguous()</code> to materialise a fresh copy.',
+  },
+  slice: {
+    shape: [3, 2], strides: [4, 2], offset: 1, storageSize: N,
+    chips: [['shape','[3, 2]'],['strides','[4, 2]'],['offset','1'],['is_contiguous()','False']],
+    note: '<strong>Slicing with a step</strong> (every other column) sets the column stride to 2 instead of 1, and shifts the storage offset to where the view starts. Gray cells belong to the original storage but are skipped by this view. No copy made.',
+  },
+};
+
+function idx(m, r, c) {
+  const {strides, offset} = MODES[m];
+  return offset + r * strides[0] + c * strides[1];
+}
+
+function render() {
+  const m = MODES[mode];
+  const [R, C] = m.shape;
+
+  const activeSet = new Set();
+  for (let r = 0; r < R; r++)
+    for (let c = 0; c < C; c++)
+      activeSet.add(idx(mode, r, c));
+
+  const selMem = sel ? idx(mode, sel[0], sel[1]) : null;
+
+  const tg = document.getElementById('tgrid');
+  tg.style.gridTemplateColumns = `repeat(${C}, 50px)`;
+  tg.innerHTML = '';
+  for (let r = 0; r < R; r++) {
+    for (let c = 0; c < C; c++) {
+      const mi = idx(mode, r, c);
+      const d = document.createElement('div');
+      d.className = 'tcell' + (sel && sel[0]===r && sel[1]===c ? ' sel' : '');
+      d.textContent = VALS[mi];
+      const rr = r, cc = c;
+      d.onclick = () => { sel = (sel && sel[0]===rr && sel[1]===cc) ? null : [rr, cc]; render(); };
+      tg.appendChild(d);
+    }
+  }
+
+  const ms = document.getElementById('mstrip');
+  const ma = document.getElementById('maddrs');
+  ms.innerHTML = ''; ma.innerHTML = '';
+  for (let i = 0; i < m.storageSize; i++) {
+    const d = document.createElement('div');
+    d.className = 'mcell' + (activeSet.has(i) ? (i === selMem ? ' highlighted' : ' active') : ' gap');
+    d.textContent = VALS[i];
+    ms.appendChild(d);
+    const a = document.createElement('div');
+    a.className = 'maddr'; a.textContent = i;
+    ma.appendChild(a);
+  }
+
+  const order = [];
+  for (let r = 0; r < R; r++)
+    for (let c = 0; c < C; c++)
+      order.push(idx(mode, r, c));
+
+  const as = document.getElementById('astrip');
+  as.innerHTML = '';
+  for (let i = 0; i < order.length; i++) {
+    const d = document.createElement('div');
+    d.className = 'acell' + (selMem !== null && order[i] === selMem ? ' hl' : '');
+    d.textContent = order[i];
+    as.appendChild(d);
+    if (i < order.length - 1) {
+      const jump = order[i+1] - order[i];
+      const a = document.createElement('div');
+      a.className = 'ajump' + (jump > 1 ? ' far' : '');
+      a.textContent = jump === 1 ? '→' : `+${jump}→`;
+      as.appendChild(a);
+    }
+  }
+
+  const chips = document.getElementById('chips');
+  chips.innerHTML = '';
+  for (const [k, v] of m.chips) {
+    const c = document.createElement('div');
+    c.className = 'chip';
+    c.innerHTML = `${k}: <span>${v}</span>`;
+    chips.appendChild(c);
+  }
+
+  document.getElementById('callout').innerHTML = m.note;
+}
+
+function setMode(m) {
+  mode = m; sel = null;
+  document.querySelectorAll('.tab').forEach((t, i) => {
+    t.classList.toggle('active', ['contiguous','transposed','slice'][i] === m);
+  });
+  render();
+}
+
+render();
+</script>
+</body>
+</html>

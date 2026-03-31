@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>01 — Floating Point Formats · LLM Notes</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .bit-layout { display: flex; gap: 4px; align-items: center; flex-wrap: nowrap; }
+  .bit-block {
+    height: 34px; border-radius: 5px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-size: 11px; font-weight: 500;
+    white-space: nowrap; padding: 0 8px;
+    flex-shrink: 0;
+  }
+  .b-sign { background: #26215C; color: #CECBF6; border: 0.5px solid #534AB7; }
+  .b-exp  { background: #0C2244; color: #85B7EB; border: 0.5px solid #185FA5; }
+  .b-frac { background: #04342C; color: #5DCAA5; border: 0.5px solid #0F6E56; }
+
+  .fmt-row { display: grid; grid-template-columns: 90px 1fr 180px; gap: 12px; align-items: center; margin-bottom: 12px; }
+  .fmt-name { font-family: var(--mono); font-size: 13px; color: #eef0f4; }
+  .fmt-range { font-size: 12px; color: var(--muted); }
+
+  .legend { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  .leg { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
+  .leg-dot { width: 11px; height: 11px; border-radius: 3px; }
+
+  .range-row { display: grid; grid-template-columns: 90px 1fr 160px; gap: 12px; align-items: center; margin-bottom: 10px; }
+  .range-bar-bg {
+    background: var(--bg3); border-radius: 4px; height: 22px;
+    border: 0.5px solid var(--border); position: relative; overflow: hidden;
+  }
+  .range-bar-fill { height: 100%; border-radius: 4px; }
+  .range-marker {
+    position: absolute; top: 0; bottom: 0; width: 2px;
+    background: var(--danger); z-index: 2;
+    transition: left 0.3s;
+  }
+
+  .check-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+  .check-card {
+    background: var(--bg3); border-radius: var(--radius);
+    border: 0.5px solid var(--border); padding: 10px 14px;
+  }
+  .check-name { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+  .check-result { font-family: var(--mono); font-size: 13px; font-weight: 500; }
+  .ok   { color: var(--accent2); }
+  .bad  { color: var(--danger); }
+
+  .num-row { display: flex; align-items: center; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+  .num-row label { font-size: 13px; color: var(--muted); }
+
+  .explain { font-size: 13px; color: var(--muted); margin-top: 10px; line-height: 1.65; }
+  .explain strong { color: var(--text); font-weight: 500; }
+</style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <nav class="nav">
+    <a class="nav-home" href="index.html">← LLM Notes</a>
+    <span class="nav-title" style="font-family:var(--mono);font-size:12px;">01 / Floating Point Formats</span>
+  </nav>
+
+  <div class="page-header">
+    <div class="tag">Number representation</div>
+    <h1>Floating Point Formats</h1>
+    <p class="subtitle">float32 · float16 · bfloat16 — what the bits actually do</p>
+  </div>
+
+  <p>Every number in a neural network is stored as a floating point value. The format determines two things: how <em>large</em> a number can be (dynamic range, controlled by exponent bits) and how <em>precise</em> it can be (controlled by fraction bits).</p>
+
+  <h2>Bit layout</h2>
+  <p>Each format allocates its 16 or 32 bits differently between three fields:</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">Bit layout — to scale</div>
+
+    <div class="legend">
+      <div class="leg"><div class="leg-dot" style="background:#534AB7;"></div>Sign (1 bit)</div>
+      <div class="leg"><div class="leg-dot" style="background:#185FA5;"></div>Exponent</div>
+      <div class="leg"><div class="leg-dot" style="background:#0F6E56;"></div>Fraction (mantissa)</div>
+    </div>
+
+    <div class="fmt-row">
+      <div class="fmt-name">float32</div>
+      <div class="bit-layout">
+        <div class="bit-block b-sign" style="width:14px;">S</div>
+        <div class="bit-block b-exp"  style="width:112px;">← 8 exp bits →</div>
+        <div class="bit-block b-frac" style="width:258px;">← 23 fraction bits →</div>
+      </div>
+      <div class="fmt-range">range 10⁻³⁸ → 10⁺³⁸</div>
+    </div>
+
+    <div class="fmt-row">
+      <div class="fmt-name">float16</div>
+      <div class="bit-layout">
+        <div class="bit-block b-sign" style="width:14px;">S</div>
+        <div class="bit-block b-exp"  style="width:70px;">← 5 exp →</div>
+        <div class="bit-block b-frac" style="width:140px;">← 10 fraction bits →</div>
+      </div>
+      <div class="fmt-range">range 10⁻⁵ → 10⁺⁵</div>
+    </div>
+
+    <div class="fmt-row">
+      <div class="fmt-name">bfloat16</div>
+      <div class="bit-layout">
+        <div class="bit-block b-sign" style="width:14px;">S</div>
+        <div class="bit-block b-exp"  style="width:112px;">← 8 exp bits →</div>
+        <div class="bit-block b-frac" style="width:98px;">← 7 frac →</div>
+      </div>
+      <div class="fmt-range">range 10⁻³⁸ → 10⁺³⁸</div>
+    </div>
+  </div>
+
+  <div class="card-accent">
+    <strong>The bfloat16 trade-off:</strong> it keeps float32's 8 exponent bits (same dynamic range) but shrinks the fraction from 23 → 7 bits (lower precision). float16 went the opposite way: 5 exponent bits → tiny range, 10 fraction bits → more precision per number.
+  </div>
+
+  <h2>Dynamic range — interactive</h2>
+  <p>Each bar represents the range of representable positive numbers on a log scale. Type any positive number to see where it lands.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">Range visualiser</div>
+
+    <div class="range-row">
+      <span style="font-family:var(--mono);font-size:12px;color:#eef0f4;">float32</span>
+      <div class="range-bar-bg">
+        <div class="range-bar-fill" style="width:100%;background:rgba(24,95,165,0.35);"></div>
+        <div class="range-marker" id="m32"></div>
+      </div>
+      <span style="font-family:var(--mono);font-size:11px;color:var(--muted);">10⁻³⁸ to 10⁺³⁸</span>
+    </div>
+
+    <div class="range-row">
+      <span style="font-family:var(--mono);font-size:12px;color:#eef0f4;">bfloat16</span>
+      <div class="range-bar-bg">
+        <div class="range-bar-fill" style="width:100%;background:rgba(15,110,86,0.35);"></div>
+        <div class="range-marker" id="mbf"></div>
+      </div>
+      <span style="font-family:var(--mono);font-size:11px;color:var(--muted);">10⁻³⁸ to 10⁺³⁸</span>
+    </div>
+
+    <div class="range-row">
+      <span style="font-family:var(--mono);font-size:12px;color:#eef0f4;">float16</span>
+      <div class="range-bar-bg" id="bar16wrap">
+        <div class="range-bar-fill" id="bar16" style="background:rgba(83,74,183,0.35);"></div>
+        <div class="range-marker" id="m16"></div>
+      </div>
+      <span style="font-family:var(--mono);font-size:11px;color:var(--muted);">~10⁻⁵ to 10⁺⁵</span>
+    </div>
+
+    <div class="num-row">
+      <label>Test a number:</label>
+      <input type="text" id="num-in" value="1e-8" style="width:130px;font-family:var(--mono);font-size:13px;background:var(--bg3);border:0.5px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;outline:none;" />
+      <button onclick="check()" style="font-size:13px;padding:6px 14px;background:var(--bg3);border:0.5px solid var(--border);color:var(--text);border-radius:6px;cursor:pointer;">Check</button>
+    </div>
+
+    <div class="check-grid" id="check-grid" style="display:none;">
+      <div class="check-card"><div class="check-name">float32</div><div class="check-result" id="r32">—</div></div>
+      <div class="check-card"><div class="check-name">bfloat16</div><div class="check-result" id="rbf">—</div></div>
+      <div class="check-card"><div class="check-name">float16</div><div class="check-result" id="r16">—</div></div>
+    </div>
+
+    <div class="explain" id="explain"></div>
+  </div>
+
+  <h2>Why this matters in ML training</h2>
+  <p>During backpropagation, gradients can become extremely small — especially in deep networks. If you store them in float16, small gradients silently underflow to zero and training breaks. bfloat16 avoids this by keeping the full float32 exponent range.</p>
+
+  <div class="card-green">
+    For ML training, <strong>range matters more than precision</strong>. bfloat16 is the preferred format on TPUs and modern GPUs (A100, H100) because it gives float32 range at half the memory. float16 often needs <em>loss scaling</em> tricks to compensate for its narrow range.
+  </div>
+
+  <dl class="key-concept">
+    <dt>float32</dt><dd>Default. Full precision. Safe for everything but uses most memory.</dd>
+    <dt>float16</dt><dd>Half memory, decent precision, but gradient underflow risk. Needs loss scaling.</dd>
+    <dt>bfloat16</dt><dd>Half memory, same range as float32, lower precision. Best for training on modern hardware.</dd>
+    <dt>Exponent bits</dt><dd>Control the dynamic range — how big/small numbers can be (powers of 2).</dd>
+    <dt>Fraction bits</dt><dd>Control precision — how many significant digits you get.</dd>
+  </dl>
+
+</div>
+
+<script>
+const RANGES = {
+  f32:  { min: -38, max: 38 },
+  bf16: { min: -38, max: 38 },
+  f16:  { min: -4.85, max: 4.85 }
+};
+
+function logPos(val, range) {
+  const lv = Math.log10(Math.abs(val));
+  return Math.max(0, Math.min(1, (lv - range.min) / (range.max - range.min))) * 100;
+}
+
+function inRange(val, r) {
+  const lv = Math.log10(Math.abs(val));
+  return lv >= r.min && lv <= r.max;
+}
+
+function check() {
+  const val = parseFloat(document.getElementById('num-in').value);
+  if (isNaN(val) || val <= 0) {
+    document.getElementById('explain').textContent = 'Enter a positive number, e.g. 1e-8 or 65000.';
+    return;
+  }
+
+  const p32 = logPos(val, RANGES.f32);
+  const pbf = logPos(val, RANGES.bf16);
+
+  const fullW = document.getElementById('bar16wrap').offsetWidth;
+  const f16span = (RANGES.f16.max - RANGES.f16.min) / (RANGES.f32.max - RANGES.f32.min);
+  const f16offset = (RANGES.f16.min - RANGES.f32.min) / (RANGES.f32.max - RANGES.f32.min);
+  document.getElementById('bar16').style.width = (f16span * 100) + '%';
+  document.getElementById('bar16').style.marginLeft = (f16offset * 100) + '%';
+
+  const p16raw = logPos(val, RANGES.f32);
+  document.getElementById('m32').style.left = p32 + '%';
+  document.getElementById('mbf').style.left = pbf + '%';
+  document.getElementById('m16').style.left = p16raw + '%';
+
+  const ok32 = inRange(val, RANGES.f32);
+  const okbf = inRange(val, RANGES.bf16);
+  const ok16 = inRange(val, RANGES.f16);
+
+  document.getElementById('check-grid').style.display = 'grid';
+  document.getElementById('r32').innerHTML = ok32 ? '<span class="ok">✓ representable</span>' : '<span class="bad">✗ overflow/underflow</span>';
+  document.getElementById('rbf').innerHTML = okbf ? '<span class="ok">✓ representable</span>' : '<span class="bad">✗ overflow/underflow</span>';
+  document.getElementById('r16').innerHTML = ok16 ? '<span class="ok">✓ representable</span>' : '<span class="bad">✗ underflow → 0</span>';
+
+  let txt = '';
+  if (!ok16 && okbf) {
+    txt = `<strong>${val.toExponential()}</strong> underflows float16 (min ≈ 6×10⁻⁵) but fits in bfloat16 and float32 because they share 8 exponent bits, giving a floor of ≈ 10⁻³⁸.`;
+  } else if (!ok16 && !okbf) {
+    txt = `<strong>${val.toExponential()}</strong> underflows all three formats — smaller than float32's min of ≈ 10⁻³⁸.`;
+  } else if (ok16) {
+    txt = `<strong>${val.toExponential()}</strong> is within float16's range, so all formats can represent it. Differences are in precision, not range.`;
+  }
+  document.getElementById('explain').innerHTML = txt;
+}
+
+check();
+</script>
+</body>
+</html>
