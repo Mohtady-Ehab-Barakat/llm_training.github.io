@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>08 — Residual Connections · LLM Notes</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .tab-row { display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap; }
+  .tab {
+    padding:6px 14px; border-radius:6px; font-size:12px; font-weight:500;
+    cursor:pointer; border:1px solid var(--border);
+    background:var(--bg2); color:var(--muted); transition:all .14s;
+  }
+  .tab:hover { background:var(--bg3); color:var(--text); }
+  .tab.on { background:#0C2244; border-color:#185FA5; color:#85B7EB; }
+
+  .layer-col { display:flex; flex-direction:column; align-items:center; }
+  .lbox {
+    width:110px; border-radius:6px; padding:7px 8px; text-align:center;
+    font-size:11px; font-weight:500; border:1.5px solid; transition:all .3s;
+  }
+  .conn-v { width:2px; height:18px; transition:background .3s; }
+  .conn-v-sm { width:2px; height:10px; }
+  .add-node {
+    width:24px; height:24px; border-radius:50%;
+    border:1.5px solid var(--border); display:flex; align-items:center;
+    justify-content:center; font-size:13px; font-weight:500;
+    color:var(--muted); background:var(--bg2);
+  }
+
+  .grad-row { display:flex; align-items:center; gap:8px; font-size:11px; font-family:var(--mono); color:var(--muted); margin-bottom:5px; }
+  .grad-bg { height:8px; background:var(--bg3); border-radius:4px; overflow:hidden; flex:1; }
+  .grad-fill { height:100%; border-radius:4px; transition:width .5s; }
+
+  .insight { background:var(--bg2); border:0.5px solid var(--border); border-radius:var(--radius); padding:10px 14px; font-size:12px; color:var(--muted); line-height:1.65; margin-top:10px; }
+  .insight strong { color:var(--text); font-weight:500; }
+  .insight code { font-size:11px; }
+</style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <nav class="nav">
+    <a class="nav-home" href="index.html">← LLM Notes</a>
+    <span class="nav-title">08 / Residual connections</span>
+  </nav>
+
+  <div class="page-header">
+    <div class="tag">Training dynamics</div>
+    <h1>Residual connections</h1>
+    <p class="subtitle">The simplest idea that made deep networks possible — and why transformers are built around it</p>
+  </div>
+
+  <h2>What is a residual connection?</h2>
+  <p>In a normal layer, you compute an output and it replaces the input entirely:</p>
+
+  <pre><code>x = F(x)       # plain — new x completely replaces old x</code></pre>
+
+  <p>With a residual connection, you compute a correction and add it to the original:</p>
+
+  <pre><code>x = x + F(x)   # residual — original x is preserved and enriched</code></pre>
+
+  <p>That's the entire idea. The sub-layer <code>F</code> is now only responsible for computing the <em>difference</em> — the correction — not the full output. The original signal flows straight through on what's called the <strong>residual highway</strong> or <strong>identity shortcut</strong>.</p>
+
+  <h2>Signal flow and gradient strength — interactive</h2>
+  <p>The forward pass shows how strongly the original signal survives through the layers. The backward pass shows how much gradient (learning signal) reaches each layer. Watch what happens to both in the "50 layers" tab.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">Switch between no residual, with residual, and a 50-layer comparison</div>
+    <div class="tab-row" id="tabs"></div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
+      <div style="flex-shrink:0;">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px;text-align:center;">Signal flow</div>
+        <div style="display:flex;gap:16px;align-items:flex-start;" id="diagram"></div>
+      </div>
+      <div style="flex:1;min-width:220px;">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">Signal strength — forward pass</div>
+        <div id="signals"></div>
+        <div style="font-size:11px;color:var(--muted);margin:10px 0 6px;">Gradient strength — backward pass</div>
+        <div id="grads"></div>
+        <div class="insight" id="insight"></div>
+      </div>
+    </div>
+  </div>
+
+  <h2>Why training without residuals fails</h2>
+  <p>Imagine playing telephone with 50 people. Each person slightly mishears and rephrases the message. By person 50, the original is unrecognisable. The same happens to signals in a deep network — each layer transforms the signal and after many layers the original information is mangled.</p>
+  <p>The bigger problem is the <em>backward pass</em>. Gradients — the error signals telling each layer how to improve — flow backward from the loss through every layer. At each layer the gradient is multiplied by that layer's local derivative. If those derivatives are less than 1 (which they often are), the gradient shrinks. After 50 multiplications of 0.9, you have 0.9⁵⁰ ≈ 0.005 — essentially zero. Early layers see no useful signal and never learn. This is the <strong>vanishing gradient problem</strong>, and it's why networks deeper than ~20 layers were impossible to train before 2015.</p>
+
+  <h2>How residuals solve it — the math</h2>
+  <p>The derivative of a sum is the sum of derivatives. So for <code>x_out = x_in + F(x_in)</code>:</p>
+
+  <pre><code>d(loss)/d(x_in) = d(loss)/d(x_out) · (1 + dF/dx_in)</code></pre>
+
+  <p>See the <code>1</code> in <code>(1 + dF/dx_in)</code>? Even if <code>dF/dx_in</code> shrinks to nearly zero, the gradient still flows back with full strength through the residual path. The gradient doesn't fight through every layer — it rides the highway straight back to layer 1.</p>
+
+  <div class="card-accent">
+    <strong>The learning target changes:</strong> without residuals, each layer must learn to map x → y where y could be anything. With residuals, each layer only needs to learn F(x) = y − x — just the small correction. Starting from F(x) = 0 (tiny weights) is always valid, and the network starts near the identity function. This is why residual networks can be initialised and trained stably from scratch.
+  </div>
+
+  <h2>Residuals in transformers</h2>
+  <p>In a transformer, every single sub-layer — both attention and FFN — is wrapped in a residual connection. This is not optional; it's the backbone of the whole architecture:</p>
+
+  <pre><code># One transformer block, pre-norm style:
+x = x + Attention(LayerNorm(x))   # residual around attention
+x = x + FFN(LayerNorm(x))         # residual around FFN</code></pre>
+
+  <p>The <code>x</code> flowing through these additions is called the <strong>residual stream</strong>. Think of it as a shared whiteboard that every layer reads from and writes to. Each layer adds new information but never erases old information — the whiteboard only grows richer.</p>
+
+  <p>In a 96-layer model like GPT-3, layer 1 and layer 96 are only ever one addition away from each other in the gradient graph. The gradient from the loss reaches layer 1 almost as strongly as it reaches layer 96. All 96 layers train simultaneously and equally.</p>
+
+  <div class="card-green">
+    <strong>Interpretability angle:</strong> because each layer only <em>adds</em> to the residual stream, researchers can decompose the final output as a sum of contributions from every layer independently. This is how mechanistic interpretability studies which layers store which knowledge — each attention head and FFN layer has a cleanly separable contribution to the final output.
+  </div>
+
+  <h2>The residual stream grows — that's fine</h2>
+  <p>Because every layer adds to <code>x</code> but nothing removes anything, the scale of <code>x</code> can gradually grow through the network. This is why LayerNorm (or RMSNorm in modern LLMs) is applied before each sub-layer in pre-norm transformers — it keeps the input to attention and FFN well-scaled even as the residual stream accumulates. The two mechanisms work together: residuals keep gradients healthy, normalisation keeps activations stable.</p>
+
+  <dl class="key-concept">
+    <dt>Residual connection</dt><dd><code>x = x + F(x)</code> instead of <code>x = F(x)</code>. The original signal is preserved and the sub-layer only computes a correction.</dd>
+    <dt>Identity shortcut</dt><dd>Another name for the residual path — the original <code>x</code> bypasses the sub-layer entirely and is added back at the end.</dd>
+    <dt>Residual stream</dt><dd>The running <code>x</code> that flows through the whole transformer. Every layer reads from it and adds to it.</dd>
+    <dt>Vanishing gradient</dt><dd>When gradients shrink to near-zero through many layers, early layers can't learn. Residuals solve this by providing a gradient highway.</dd>
+    <dt>Gradient highway</dt><dd>The direct backward path through the addition <code>x + F(x)</code>. The gradient of a sum includes a full-strength copy through the identity branch.</dd>
+    <dt>ResNet (2015)</dt><dd>The paper "Deep Residual Learning for Image Recognition" (He et al.) introduced residual connections, enabling 152-layer networks and winning ImageNet. Transformers inherited this idea directly.</dd>
+  </dl>
+
+  <h2>In one sentence</h2>
+  <p>A residual connection is <code>x = x + F(x)</code> instead of <code>x = F(x)</code> — it lets the original signal bypass each sub-layer and flow straight through the network, giving gradients a free highway backward so early layers learn just as effectively as late ones.</p>
+
+</div>
+
+<script>
+const MODES = {
+  plain: {
+    label: 'No residual',
+    color: '#A32D2D',
+    layers: ['Layer 1','Layer 2','Layer 3','Layer 4','Layer 5'],
+    fwd: [1.0, 0.55, 0.28, 0.09, 0.02],
+    bwd: [0.02, 0.09, 0.28, 0.55, 1.0],
+    insight: '<strong>Without residuals</strong>, each layer replaces the signal with its own output. Signal degrades forward: by Layer 5 most of the original information is gone. Gradients degrade backward: by the time they reach Layer 1 they have nearly vanished. Early layers barely learn.',
+  },
+  residual: {
+    label: 'With residual',
+    color: '#0F6E56',
+    layers: ['Layer 1','Layer 2','Layer 3','Layer 4','Layer 5'],
+    fwd: [1.0, 0.97, 0.95, 0.93, 0.91],
+    bwd: [0.92, 0.94, 0.96, 0.98, 1.0],
+    insight: '<strong>With residuals</strong>, each layer adds its output to the input: <code>x = x + F(x)</code>. The original signal rides the highway unchanged. During backprop, gradients also flow straight back through the additions — the gradient of a sum carries a full-strength copy along the residual path. All layers train effectively.',
+  },
+  deep: {
+    label: '50 layers — side by side',
+    color: '#185FA5',
+    layers: ['L1','L10','L20','L30','L40','L50'],
+    fwd_plain: [1.0, 0.07, 0.004, 0.0002, 0.000008, 0.0000003],
+    fwd_res:   [1.0, 0.97, 0.94,  0.91,   0.88,     0.85],
+    bwd_plain: [0.0000003, 0.000008, 0.0002, 0.004, 0.07, 1.0],
+    bwd_res:   [0.86, 0.88, 0.91, 0.93, 0.96, 1.0],
+    insight: '<strong>At 50 layers</strong>, plain networks have completely dead early layers — gradient at L1 is essentially 0.00003%. This is why networks deeper than ~20 layers were impossible before residuals. With residuals the signal and gradient stay alive throughout the entire depth.',
+  },
+};
+
+let mode = 'plain';
+
+function buildDiagram(m) {
+  const d = document.getElementById('diagram');
+  const isDeep = m === 'deep';
+  const layers = MODES[m].layers;
+  const col = MODES[m].color;
+  const isRes = m === 'residual';
+
+  if (isDeep) {
+    d.innerHTML = `
+      <div class="layer-col">
+        <div style="font-size:10px;color:var(--muted);margin-bottom:6px;text-align:center;">No residual</div>
+        ${layers.map((l,i) => `
+          <div class="lbox" style="border-color:#A32D2D55;color:#A32D2D;background:rgba(163,45,45,0.07);">${l}</div>
+          ${i<layers.length-1 ? '<div class="conn-v" style="background:#A32D2D44;"></div>' : ''}
+        `).join('')}
+      </div>
+      <div class="layer-col">
+        <div style="font-size:10px;color:var(--muted);margin-bottom:6px;text-align:center;">With residual</div>
+        ${layers.map((l,i) => `
+          <div class="lbox" style="border-color:#0F6E5655;color:#0F6E56;background:rgba(15,110,86,0.07);">${l}</div>
+          ${i<layers.length-1 ? '<div class="conn-v" style="background:#0F6E5644;"></div>' : ''}
+        `).join('')}
+      </div>`;
+    return;
+  }
+
+  let html = `<div class="layer-col">`;
+  html += `<div style="font-size:10px;color:var(--muted);margin-bottom:4px;">x in</div>`;
+  layers.forEach((l, i) => {
+    html += `<div class="conn-v" style="background:${col}66;"></div>`;
+    if (isRes) {
+      html += `<div class="add-node">+</div><div class="conn-v conn-v-sm" style="background:${col}55;"></div>`;
+    }
+    html += `<div class="lbox" style="border-color:${col}66;color:${col};background:${col}11;">${l}</div>`;
+  });
+  html += `<div class="conn-v" style="background:${col}66;"></div>`;
+  html += `<div style="font-size:10px;color:var(--muted);margin-top:4px;">x out</div>`;
+  html += `</div>`;
+
+  if (isRes) {
+    html += `<div style="display:flex;flex-direction:column;align-items:center;margin-top:24px;gap:4px;">
+      <div style="width:1.5px;flex:1;background:${col}44;"></div>
+      <div style="font-size:10px;color:${col};font-weight:500;padding:4px 0;writing-mode:vertical-lr;transform:rotate(180deg);white-space:nowrap;">residual highway</div>
+      <div style="width:1.5px;flex:1;background:${col}44;"></div>
+    </div>`;
+  }
+
+  d.innerHTML = html;
+}
+
+function barRow(label, val, color, val2, color2) {
+  const pct = Math.min(100, Math.round(val * 100));
+  let r = `<div class="grad-row">
+    <span style="min-width:30px;">${label}</span>
+    <div class="grad-bg"><div class="grad-fill" style="width:${pct}%;background:${color};"></div></div>
+    <span style="min-width:40px;text-align:right;">${(val*100).toFixed(val < 0.001 ? 4 : 1)}%</span>`;
+  if (val2 !== undefined) {
+    const pct2 = Math.min(100, Math.round(val2 * 100));
+    r += `<div class="grad-bg"><div class="grad-fill" style="width:${pct2}%;background:${color2};"></div></div>
+    <span style="min-width:40px;text-align:right;">${(val2*100).toFixed(1)}%</span>`;
+  }
+  r += `</div>`;
+  return r;
+}
+
+function buildSignals(m) {
+  const md = MODES[m];
+  const isDeep = m === 'deep';
+  const layers = md.layers;
+
+  let fwdHtml = '', bwdHtml = '';
+
+  if (isDeep) {
+    const hdr = `<div class="grad-row"><span style="min-width:30px;"></span>
+      <span style="color:#A32D2D;font-size:10px;font-weight:500;flex:1;text-align:center;">no residual</span>
+      <span style="min-width:40px;"></span>
+      <span style="color:#0F6E56;font-size:10px;font-weight:500;flex:1;text-align:center;">residual</span>
+      <span style="min-width:40px;"></span></div>`;
+    fwdHtml = hdr + layers.map((l,i) => barRow(l, md.fwd_plain[i], '#A32D2D', md.fwd_res[i], '#0F6E56')).join('');
+    bwdHtml = hdr + layers.map((l,i) => barRow(l, md.bwd_plain[i], '#A32D2D', md.bwd_res[i], '#0F6E56')).join('');
+  } else {
+    const col = md.color;
+    fwdHtml = layers.map((l,i) => barRow(l, md.fwd[i], col)).join('');
+    bwdHtml = [...layers].reverse().map((l,i) => barRow(l, md.bwd[layers.length-1-i], col)).join('');
+  }
+
+  document.getElementById('signals').innerHTML = fwdHtml;
+  document.getElementById('grads').innerHTML = bwdHtml;
+  document.getElementById('insight').innerHTML = md.insight;
+}
+
+const tabDefs = [
+  {id:'plain', label:'No residual'},
+  {id:'residual', label:'With residual'},
+  {id:'deep', label:'50 layers — side by side'},
+];
+
+const tabWrap = document.getElementById('tabs');
+tabDefs.forEach(({id, label}) => {
+  const t = document.createElement('div');
+  t.className = 'tab' + (id === mode ? ' on' : '');
+  t.textContent = label;
+  t.onclick = () => {
+    mode = id;
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('on'));
+    t.classList.add('on');
+    buildDiagram(mode);
+    buildSignals(mode);
+  };
+  tabWrap.appendChild(t);
+});
+
+buildDiagram(mode);
+buildSignals(mode);
+</script>
+</body>
+</html>
