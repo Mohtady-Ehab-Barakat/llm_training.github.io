@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>12 — Regularisation & Dropout · LLM Notes</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .tab { padding:5px 14px; border-radius:6px; font-size:12px; font-weight:500; cursor:pointer; border:1px solid var(--border); background:var(--bg2); color:var(--muted); transition:all .14s; }
+  .tab:hover { background:var(--bg3); color:var(--text); }
+  .tab.on { background:#0C2244; border-color:#185FA5; color:#85B7EB; }
+
+  .mode-btn { padding:5px 14px; border-radius:6px; font-size:12px; font-weight:500; cursor:pointer; border:1px solid var(--border); background:var(--bg2); color:var(--muted); transition:all .14s; }
+  .mode-btn:hover { background:var(--bg3); color:var(--text); }
+  .mode-btn.on { background:#0C2244; border-color:#185FA5; color:#85B7EB; }
+
+  .leg { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--muted); }
+  .leg-line { width:24px; height:2.5px; border-radius:2px; }
+  .leg-dot { width:8px; height:8px; border-radius:50%; }
+
+  .insight-box { background:var(--bg2); border-radius:var(--radius); padding:10px 14px; font-size:12px; color:var(--muted); line-height:1.65; border:0.5px solid var(--border); margin-top:10px; }
+  .insight-box strong { color:var(--text); font-weight:500; }
+
+  .reg-card { background:var(--bg2); border:0.5px solid var(--border); border-radius:var(--radius-lg); padding:16px 20px; margin-bottom:12px; }
+  .reg-card h3 { font-family:var(--mono); font-size:13px; font-weight:500; color:var(--text); margin:0 0 4px; text-transform:none; letter-spacing:0; }
+  .reg-card .sub { font-size:11px; color:var(--muted); font-family:var(--mono); margin-bottom:10px; }
+
+  .where-row { display:flex; align-items:flex-start; gap:8px; margin-bottom:8px; font-size:12px; }
+  .where-tag { font-family:var(--mono); font-size:11px; background:var(--bg3); border:0.5px solid var(--border); border-radius:4px; padding:2px 8px; color:var(--muted); white-space:nowrap; flex-shrink:0; margin-top:1px; }
+  .where-desc { color:var(--muted); line-height:1.6; }
+</style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <nav class="nav">
+    <a class="nav-home" href="index.html">← LLM Notes</a>
+    <span class="nav-title">12 / Regularisation & dropout</span>
+  </nav>
+
+  <div class="page-header">
+    <div class="tag">Training</div>
+    <h1>Regularisation & Dropout</h1>
+    <p class="subtitle">Overfitting · L1 · L2 · weight decay · dropout · where each appears in transformers</p>
+  </div>
+
+  <h2>The problem — overfitting</h2>
+  <p>A model overfits when it learns the training data <em>too well</em> — including its noise and random fluctuations — and loses the ability to generalise to new data. Fitting a high-degree polynomial to noisy data gives a curve that passes through every training point perfectly but performs terribly on any new point, because it has memorised noise rather than learned the pattern.</p>
+  <p>Regularisation is any technique that discourages overfitting by adding a constraint or penalty that pushes the model toward simpler, more generalisable solutions.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">Overfitting vs regularisation — click each tab</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;" id="curve-tabs"></div>
+    <canvas id="cv" width="600" height="280" style="width:100%;border-radius:8px;background:var(--bg2);border:0.5px solid var(--border);display:block;"></canvas>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;">
+      <div class="leg"><div class="leg-dot" style="background:var(--muted);"></div>Training data (noisy)</div>
+      <div class="leg"><div class="leg-line" style="background:#A32D2D;"></div><span id="leg1">Overfit model</span></div>
+      <div class="leg" id="leg2-wrap"><div class="leg-line" style="background:#0F6E56;"></div><span id="leg2">Regularised model</span></div>
+      <div class="leg"><div class="leg-line" style="background:rgba(150,150,150,0.5);"></div>True function (dashed)</div>
+    </div>
+    <div class="insight-box" id="curve-insight"></div>
+  </div>
+
+  <h2>L2 regularisation — weight decay</h2>
+  <p>L2 adds a penalty to the loss proportional to the <em>square</em> of every weight:</p>
+
+  <pre><code>Loss_total = Loss_task + λ · Σ w²
+
+# Gradient of penalty w.r.t. w = 2λw
+# Update becomes:
+w ← w · (1 − 2·lr·λ) − lr · task_gradient
+        ↑ this is the "decay" — w shrinks every step</code></pre>
+
+  <p>Every weight gets multiplied by a number slightly less than 1 at every step. Weights not being pushed by data gradually shrink toward zero. This prevents any single weight from growing too large and creating wild behaviour. All weights are shrunk but none reach exactly zero.</p>
+
+  <div class="card-accent">
+    <strong>Weight decay vs L2 in Adam:</strong> in standard SGD they are identical. In Adam, L2 regularisation (adding λw to the gradient before the adaptive step) and weight decay (multiplying weights directly by (1−λ) after the step) produce different effective penalties per weight — because the adaptive scaling distorts the L2 penalty. AdamW decouples them correctly. In transformers, always use weight decay (AdamW-style). Typical λ = 0.1.
+  </div>
+
+  <h2>L1 regularisation — Lasso</h2>
+  <p>L1 adds a penalty proportional to the <em>absolute value</em> of every weight:</p>
+
+  <pre><code>Loss_total = Loss_task + λ · Σ |w|
+
+# Gradient of |w| = sign(w) — always ±1
+# Even tiny weights feel constant pressure toward zero
+# Many weights get pushed to EXACTLY zero → sparse model</code></pre>
+
+  <p>L1 produces sparse models where many weights are exactly 0 — useful for automatic feature selection. Less common in deep learning because the non-smooth gradient can cause instability. L2 is the standard for neural networks.</p>
+
+  <h2>Dropout — the most important regularisation in transformers</h2>
+  <p>Dropout (Srivastava et al., 2014) is completely different from L1/L2. Instead of penalising weight magnitudes, it randomly <em>deletes</em> neurons during each forward pass of training.</p>
+  <p>Every neuron is independently zeroed with probability p (the drop rate). The surviving neurons are scaled up by 1/(1−p) to keep the expected sum of activations unchanged. At inference, all neurons are active and no scaling is needed.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">Dropout — training mode randomly kills neurons, inference uses all of them</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
+      <div style="display:flex;gap:6px;" id="mode-btns"></div>
+      <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-left:4px;">
+        <label>Drop rate p:</label>
+        <input type="range" min="0" max="0.8" step="0.1" value="0.4" id="p-slider" oninput="onP()" style="width:90px;">
+        <span style="font-family:var(--mono);font-weight:500;color:var(--text);min-width:28px;" id="p-out">0.4</span>
+      </div>
+      <button onclick="resample()" style="font-size:12px;padding:5px 12px;">↺ Resample</button>
+    </div>
+    <canvas id="dv" width="620" height="260" style="width:100%;border-radius:8px;background:var(--bg2);border:0.5px solid var(--border);display:block;"></canvas>
+    <div class="insight-box" id="drop-insight"></div>
+  </div>
+
+  <h2>Why dropout prevents overfitting</h2>
+
+  <div class="reg-card">
+    <h3>Ensemble perspective</h3>
+    <p style="font-size:13px;color:var(--muted);line-height:1.7;margin:0;">Every forward pass uses a different random subset of neurons — a different "thinned" network. With n neurons and drop rate p, there are exponentially many possible masks. Each mask is effectively a different model. Dropout trains all of them simultaneously with shared parameters. At inference, the full network acts like an ensemble average of all these models. Ensembles always generalise better than single models.</p>
+  </div>
+
+  <div class="reg-card">
+    <h3>Co-adaptation perspective</h3>
+    <p style="font-size:13px;color:var(--muted);line-height:1.7;margin:0;">In an overfit network, neurons become dependent on each other — neuron A always fires with neuron B, developing a co-adapted pattern that memorises training data. Dropout breaks this: neuron A can never assume B will be present. Each neuron must learn something independently useful, forcing more robust, distributed representations.</p>
+  </div>
+
+  <div class="reg-card">
+    <h3>Noise injection perspective</h3>
+    <p style="font-size:13px;color:var(--muted);line-height:1.7;margin:0;">Dropout injects multiplicative noise into the activations. Training under noise is a classical regularisation technique — it prevents the model from fitting the fine-grained details of the training set. The random mask is different each batch, so no specific noise pattern can be memorised.</p>
+  </div>
+
+  <h2>The inverted dropout formula</h2>
+
+  <pre><code># Training (inverted dropout — the modern standard):
+mask   = Bernoulli(1 − p)           # 1=keep, 0=drop
+output = (mask * x) / (1 − p)      # scale up survivors
+
+# Inference:
+output = x                          # no masking, no scaling needed
+
+# Why "inverted"? The scaling is done at training time.
+# This means the inference code path is unchanged — just
+# disable dropout and run normally. model.eval() in PyTorch.</code></pre>
+
+  <h2>Where dropout appears in a transformer</h2>
+
+  <pre><code># After embedding:
+x = dropout(token_emb + pos_emb, p=0.1)
+
+# Per block — attention:
+w   = dropout(softmax(scores), p=0.1)   # attention weights
+out = dropout(Attn(LN(x)),     p=0.1)   # attention output
+x   = x + out
+
+# Per block — FFN:
+h   = dropout(GELU(x @ W1),   p=0.1)   # after activation
+out = dropout(h @ W2,          p=0.1)   # FFN output
+x   = x + out</code></pre>
+
+  <p>Four dropout applications per block, each with an independent random mask. Transformers use relatively low p = 0.1 because they are already regularised by weight decay, large datasets, and the structure of attention itself. During fine-tuning on small datasets, p = 0.2–0.3 is common to prevent overfitting the small fine-tuning set.</p>
+
+  <h2>Training vs inference — the crucial difference</h2>
+  <p>Dropout only runs during training. At inference all neurons are active and the network runs at full capacity. In PyTorch:</p>
+
+  <pre><code>model.train()   # enables dropout, BatchNorm uses batch stats
+model.eval()    # disables dropout, BatchNorm uses running stats
+
+# Forgetting model.eval() before inference is a classic bug:
+# the model still randomly zeros neurons → different output
+# every run, even for identical inputs.</code></pre>
+
+  <h2>Dropout rates in practice</h2>
+  <dl class="key-concept">
+    <dt>p = 0.5</dt><dd>Very aggressive. Classic for fully-connected layers in older models (AlexNet era). Too strong for transformers.</dd>
+    <dt>p = 0.1</dt><dd>Standard for transformer attention, FFN, and embedding layers. Used in GPT-2, BERT, LLaMA.</dd>
+    <dt>p = 0.0</dt><dd>No dropout. Sometimes used when the dataset is very large and regularisation isn't needed (some GPT-3 ablations).</dd>
+    <dt>Fine-tuning</dt><dd>Often increased to p = 0.2–0.3 when fine-tuning a large model on a small dataset.</dd>
+  </dl>
+
+  <h2>Other regularisation techniques in LLMs</h2>
+
+  <div class="where-row"><div class="where-tag">gradient clipping</div><div class="where-desc">Caps the gradient norm before each update (threshold = 1.0). Prevents a single bad batch from causing an enormous weight update that derails training. Universal in transformer training.</div></div>
+  <div class="where-row"><div class="where-tag">early stopping</div><div class="where-desc">Stop training when validation loss stops improving. Simple and effective. Requires a held-out validation set.</div></div>
+  <div class="where-row"><div class="where-tag">label smoothing</div><div class="where-desc">Instead of hard 0/1 targets, train on smooth targets (e.g. 0.9 for correct, 0.1/V spread over others). Prevents overconfidence. Used in the original transformer and some LLMs.</div></div>
+  <div class="where-row"><div class="where-tag">weight decay</div><div class="where-desc">L2 applied via AdamW. λ = 0.1 is the standard for GPT-3, LLaMA, and most modern LLMs. Applied to all parameters except LayerNorm γ/β and biases.</div></div>
+
+  <div class="card-green">
+    <strong>The practical stack in modern LLMs:</strong> weight decay (AdamW, λ=0.1) + dropout (p=0.1) + gradient clipping (norm=1.0). All three run simultaneously during training. At inference, only weight decay has any lasting effect — it shaped the weights. Dropout and gradient clipping play no role once training is done.
+  </div>
+
+</div>
+
+<script>
+const dark = window.matchMedia('(prefers-color-scheme:dark)').matches;
+const W=600, H=280, PAD=32;
+
+function trueFn(x){ return Math.sin(x*Math.PI*1.5)*0.6+0.5; }
+function seededRand(s){ let x=Math.sin(s*9301+49297)*233280; return x-Math.floor(x); }
+
+const NPTS=18;
+const pts = Array.from({length:NPTS}, (_,i)=>{
+  const x = seededRand(i*3+42)*0.92+0.04;
+  const noise = (seededRand(i*7+43)-0.5)*0.28;
+  return {x, y:Math.max(0.02,Math.min(0.98,trueFn(x)+noise))};
+});
+
+function toC(x,y){ return [PAD+(x-0)/(1-0)*(W-2*PAD), H-PAD-(y-0)/(1-0)*(H-2*PAD)]; }
+
+function polyFit(pts, degree, lambda, l1) {
+  const n=pts.length, d=degree+1;
+  const phi = pts.map(p=>Array.from({length:d},(_,j)=>Math.pow(p.x,j)));
+  let w = Array(d).fill(0);
+  const lr=0.15;
+  for(let iter=0;iter<8000;iter++){
+    const grad=Array(d).fill(0);
+    phi.forEach((row,i)=>{
+      const pred=row.reduce((s,v,j)=>s+v*w[j],0);
+      const err=pred-pts[i].y;
+      row.forEach((v,j)=>grad[j]+=2*err*v/n);
+    });
+    if(l1){ w.forEach((_,j)=>{ grad[j]+=lambda*Math.sign(w[j]); }); }
+    else   { w.forEach((_,j)=>{ grad[j]+=2*lambda*w[j]; }); }
+    w=w.map((v,j)=>v-lr*grad[j]);
+  }
+  return x=>w.reduce((s,v,j)=>s+v*Math.pow(x,j),0);
+}
+
+const overfitFn = polyFit(pts,12,0,false);
+const l2Fn      = polyFit(pts,12,0.004,false);
+const l1Fn      = polyFit(pts,12,0.002,true);
+
+const MODES_C = [
+  { label:'No regularisation (overfit)',
+    fn1:overfitFn, fn2:null,
+    insight:'<strong>Overfitting:</strong> a degree-12 polynomial with zero regularisation memorises every noisy training point. It wiggles wildly between them. On unseen test data it performs terribly — it learned the noise, not the pattern.',
+  },
+  { label:'L2 regularisation (weight decay)',
+    fn1:overfitFn, fn2:l2Fn,
+    insight:'<strong>L2 regularisation</strong> adds a penalty proportional to w² to the loss. This forces weights to stay small, preventing extreme wiggles. The fitted curve is much smoother and matches the true function (dashed). All weights are shrunk but none reach exactly zero.',
+  },
+  { label:'L1 regularisation (Lasso)',
+    fn1:overfitFn, fn2:l1Fn,
+    insight:'<strong>L1 regularisation</strong> adds a penalty proportional to |w|. It also smooths the curve, but pushes small weights all the way to exactly zero — producing a sparse model. Useful for feature selection but less common in deep learning than L2.',
+  },
+];
+
+let curMode = 1;
+
+function drawCurves() {
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0,0,W,H);
+  const gridC = dark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)';
+  ctx.strokeStyle=gridC; ctx.lineWidth=0.5;
+  [0.2,0.4,0.6,0.8].forEach(v=>{
+    const[,cy]=toC(0,v); ctx.beginPath();ctx.moveTo(PAD,cy);ctx.lineTo(W-PAD,cy);ctx.stroke();
+    const[cx]=toC(v,0); ctx.beginPath();ctx.moveTo(cx,PAD);ctx.lineTo(cx,H-PAD);ctx.stroke();
+  });
+
+  function drawCurve(fn,color,dashed,lw){
+    ctx.strokeStyle=color; ctx.lineWidth=lw||2.5; ctx.setLineDash(dashed||[]);
+    ctx.beginPath(); let first=true;
+    for(let px=PAD;px<=W-PAD;px++){
+      const x=px/W; const y=fn(x);
+      const[cx,cy]=toC(x,y);
+      const cy2=Math.max(2,Math.min(H-2,cy));
+      first?ctx.moveTo(cx,cy2):ctx.lineTo(cx,cy2); first=false;
+    }
+    ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  drawCurve(trueFn, dark?'rgba(180,180,180,0.3)':'rgba(80,80,80,0.25)', [5,4], 1.5);
+  drawCurve(MODES_C[curMode].fn1, '#A32D2D');
+  if(MODES_C[curMode].fn2) drawCurve(MODES_C[curMode].fn2, '#0F6E56');
+
+  pts.forEach(({x,y})=>{
+    const[cx,cy]=toC(x,y);
+    ctx.fillStyle=dark?'#888780':'#5F5E5A';
+    ctx.beginPath();ctx.arc(cx,cy,5,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle=dark?'#1a1e25':'#f1efe8';
+    ctx.beginPath();ctx.arc(cx,cy,3,0,Math.PI*2);ctx.fill();
+  });
+
+  document.getElementById('curve-insight').innerHTML = MODES_C[curMode].insight;
+  const leg2 = document.getElementById('leg2-wrap');
+  if(leg2) leg2.style.opacity = MODES_C[curMode].fn2 ? '1' : '0.25';
+}
+
+const ctabs = document.getElementById('curve-tabs');
+MODES_C.forEach((m,i)=>{
+  const t=document.createElement('div'); t.className='tab'+(i===curMode?' on':''); t.textContent=m.label;
+  t.onclick=()=>{ curMode=i; document.querySelectorAll('#curve-tabs .tab').forEach((x,j)=>x.classList.toggle('on',j===i)); drawCurves(); };
+  ctabs.appendChild(t);
+});
+drawCurves();
+
+const DLAYERS=[4,6,6,6,4];
+let trainMode=true, dropP=0.4, dmask=[];
+
+function buildMask(){ dmask=DLAYERS.map(n=>Array.from({length:n},()=>Math.random()>dropP)); }
+buildMask();
+
+function drawDropout(){
+  const cv=document.getElementById('dv');
+  const ctx=cv.getContext('2d');
+  const DW=cv.width, DH=260;
+  ctx.clearRect(0,0,DW,DH);
+  const NL=DLAYERS.length;
+  const xs=DLAYERS.map((_,i)=>60+i*(DW-120)/(NL-1));
+  const ys=DLAYERS.map(n=>{const gap=(DH-60)/(n+1);return Array.from({length:n},(_,j)=>30+gap*(j+1));});
+
+  const edgeA=dark?'rgba(24,95,165,0.3)':'rgba(24,95,165,0.2)';
+  const edgeD=dark?'rgba(100,100,100,0.08)':'rgba(180,180,180,0.12)';
+  const nodeA='#185FA5';
+  const nodeDB=dark?'rgba(80,80,80,0.18)':'rgba(200,200,200,0.3)';
+  const nodeDS=dark?'rgba(80,80,80,0.3)':'rgba(180,180,180,0.5)';
+
+  for(let l=0;l<NL-1;l++){
+    ys[l].forEach((y1,i)=>{
+      const srcA=trainMode?dmask[l][i]:true;
+      ys[l+1].forEach((y2,j)=>{
+        const dstA=trainMode?dmask[l+1][j]:true;
+        ctx.strokeStyle=(srcA&&dstA)?edgeA:edgeD;
+        ctx.lineWidth=(srcA&&dstA)?1:0.5;
+        ctx.beginPath();ctx.moveTo(xs[l],y1);ctx.lineTo(xs[l+1],y2);ctx.stroke();
+      });
+    });
+  }
+
+  DLAYERS.forEach((n,l)=>{
+    ys[l].forEach((y,i)=>{
+      const active=trainMode?dmask[l][i]:true;
+      const r=active?12:10;
+      if(active){
+        ctx.fillStyle=nodeA;
+        ctx.beginPath();ctx.arc(xs[l],y,r,0,Math.PI*2);ctx.fill();
+        if(!trainMode){
+          ctx.fillStyle='rgba(255,255,255,0.65)';
+          ctx.font='bold 8px monospace';ctx.textAlign='center';ctx.textBaseline='middle';
+          ctx.fillText('×'+(1-dropP).toFixed(1),xs[l],y);
+        }
+      } else {
+        ctx.fillStyle=nodeDB;ctx.strokeStyle=nodeDS;ctx.lineWidth=1;
+        ctx.beginPath();ctx.arc(xs[l],y,r,0,Math.PI*2);ctx.fill();ctx.stroke();
+        const d=5;ctx.strokeStyle=nodeDS;ctx.lineWidth=1.5;
+        ctx.beginPath();ctx.moveTo(xs[l]-d,y-d);ctx.lineTo(xs[l]+d,y+d);ctx.stroke();
+        ctx.beginPath();ctx.moveTo(xs[l]+d,y-d);ctx.lineTo(xs[l]-d,y+d);ctx.stroke();
+      }
+    });
+  });
+
+  const lc=dark?'rgba(255,255,255,0.35)':'rgba(0,0,0,0.35)';
+  ctx.fillStyle=lc;ctx.font='11px monospace';ctx.textAlign='center';
+  ['Input','Hidden','Hidden','Hidden','Output'].forEach((l,i)=>ctx.fillText(l,xs[i],DH-8));
+
+  const alive=trainMode?dmask.flat().filter(Boolean).length:DLAYERS.reduce((a,b)=>a+b,0);
+  const total=DLAYERS.reduce((a,b)=>a+b,0);
+  const dropped=total-alive;
+  const ins=document.getElementById('drop-insight');
+  if(trainMode){
+    ins.innerHTML=`<strong>Training mode</strong> — dropout active. Each neuron independently zeroed with p=${dropP.toFixed(1)}. This batch: <strong>${dropped} of ${total} neurons dropped</strong> (${(dropped/total*100).toFixed(0)}%). Survivors scaled by <strong>1/(1−p) = ${(1/(1-dropP)).toFixed(2)}×</strong>. Every forward pass uses a different random mask — the network must learn without relying on any single neuron.`;
+  } else {
+    ins.innerHTML=`<strong>Inference mode</strong> — dropout disabled. All ${total} neurons active. No random masking. No scaling needed (training scaling already compensated). The full network runs at full capacity. This is how the trained model is used for generation or prediction.`;
+  }
+}
+
+function resample(){ buildMask(); drawDropout(); }
+function onP(){ dropP=parseFloat(document.getElementById('p-slider').value); document.getElementById('p-out').textContent=dropP.toFixed(1); buildMask(); drawDropout(); }
+window.resample=resample; window.onP=onP;
+
+const mbtns=document.getElementById('mode-btns');
+[{l:'Training (dropout ON)',v:true},{l:'Inference (dropout OFF)',v:false}].forEach(({l,v})=>{
+  const b=document.createElement('div'); b.className='mode-btn'+(v===trainMode?' on':''); b.textContent=l;
+  b.onclick=()=>{ trainMode=v; document.querySelectorAll('#mode-btns .mode-btn').forEach((x,j)=>x.classList.toggle('on',j===(v?0:1))); drawDropout(); };
+  mbtns.appendChild(b);
+});
+drawDropout();
+</script>
+</body>
+</html>
