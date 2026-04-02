@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>10 — LLM Dimensions · LLM Notes</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .ctrl-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px 24px; margin-bottom:16px; }
+  @media(max-width:500px){ .ctrl-grid { grid-template-columns:1fr; } }
+  .ctrl-item label { display:block; font-size:12px; color:var(--muted); margin-bottom:3px; }
+  .ctrl-item .cv { font-family:var(--mono); font-size:13px; font-weight:500; color:var(--text); margin-top:2px; }
+
+  .stat-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:8px; margin:12px 0; }
+  .stat-card { background:var(--bg3); border:0.5px solid var(--border); border-radius:var(--radius); padding:10px 12px; }
+  .stat-card .sl { font-size:11px; color:var(--muted); margin-bottom:3px; }
+  .stat-card .sv { font-size:16px; font-weight:500; color:var(--text); font-family:var(--mono); }
+  .stat-card.hi { border-color:#0F6E5688; background:rgba(15,110,86,0.09); }
+  .stat-card.hi .sv { color:var(--accent2); }
+
+  .pbar-wrap { margin-bottom:10px; }
+  .pbar-title { font-size:12px; color:var(--muted); margin-bottom:4px; display:flex; justify-content:space-between; }
+  .pbar-bg { background:var(--bg3); border-radius:4px; height:9px; overflow:hidden; }
+  .pbar-fill { height:100%; border-radius:4px; transition:width .4s; }
+
+  .sf-row { display:flex; align-items:center; gap:8px; margin-bottom:5px; font-size:12px; }
+  .sf-name { color:var(--muted); width:180px; flex-shrink:0; }
+  .sf-shape { font-family:var(--mono); font-weight:500; color:var(--text); background:var(--bg3); border:0.5px solid var(--border); border-radius:4px; padding:2px 9px; font-size:11px; white-space:nowrap; }
+  .sf-note { color:var(--muted); font-size:11px; }
+
+  .dim-card { background:var(--bg2); border:0.5px solid var(--border); border-radius:var(--radius-lg); padding:16px 20px; margin-bottom:12px; border-left:3px solid var(--dc,var(--border)); }
+  .dim-card h3 { font-family:var(--mono); font-size:13px; font-weight:500; color:var(--dc,var(--text)); margin:0 0 4px; text-transform:none; letter-spacing:0; }
+  .dim-card .dim-alias { font-size:11px; color:var(--muted); font-family:var(--mono); margin-bottom:10px; }
+  .dim-card p { font-size:13px; color:var(--muted); margin-bottom:8px; line-height:1.7; }
+  .dim-card p:last-child { margin-bottom:0; }
+  .dim-card strong { color:var(--text); font-weight:500; }
+
+  .param-formula { font-family:var(--mono); font-size:12px; background:var(--bg3); border:0.5px solid var(--border); border-radius:var(--radius); padding:12px 16px; line-height:2; margin:12px 0; overflow-x:auto; white-space:pre; color:var(--text); }
+  .param-formula .cm { color:var(--muted); }
+
+  .warn-box { background:var(--bg2); border:0.5px solid var(--border); border-radius:var(--radius); padding:9px 14px; font-size:12px; color:var(--muted); line-height:1.65; margin-top:8px; }
+</style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <nav class="nav">
+    <a class="nav-home" href="index.html">← LLM Notes</a>
+    <span class="nav-title">10 / LLM dimensions</span>
+  </nav>
+
+  <div class="page-header">
+    <div class="tag">Architecture</div>
+    <h1>LLM dimensions & building blocks</h1>
+    <p class="subtitle">D · H · L · V · T · head_dim · d_ffn · KV cache — what every number means</p>
+  </div>
+
+  <p>Every LLM is defined by a small set of hyperparameters. Every parameter count, every tensor shape, every memory requirement flows from these numbers. The interactive explorer below lets you dial them and see everything update live.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">Model anatomy explorer — try the presets or drag any slider</div>
+
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;" id="presets"></div>
+
+    <div class="ctrl-grid">
+      <div class="ctrl-item">
+        <label>Model dimension D (d_model)</label>
+        <input type="range" min="64" max="8192" step="64" value="768" id="D" oninput="calc()" style="width:100%;">
+        <div class="cv" id="D-out">768</div>
+      </div>
+      <div class="ctrl-item">
+        <label>Attention heads H</label>
+        <input type="range" min="1" max="96" step="1" value="12" id="H" oninput="calc()" style="width:100%;">
+        <div class="cv" id="H-out">12  →  head_dim = 64</div>
+      </div>
+      <div class="ctrl-item">
+        <label>Layers (transformer blocks) L</label>
+        <input type="range" min="1" max="128" step="1" value="12" id="L" oninput="calc()" style="width:100%;">
+        <div class="cv" id="L-out">12</div>
+      </div>
+      <div class="ctrl-item">
+        <label>Vocabulary size V</label>
+        <input type="range" min="1000" max="150000" step="1000" value="50257" id="V" oninput="calc()" style="width:100%;">
+        <div class="cv" id="V-out">50,257</div>
+      </div>
+      <div class="ctrl-item">
+        <label>Context length T (sequence length)</label>
+        <input type="range" min="128" max="131072" step="128" value="2048" id="T" oninput="calc()" style="width:100%;">
+        <div class="cv" id="T-out">2,048</div>
+      </div>
+      <div class="ctrl-item">
+        <label>FFN multiplier (hidden = D × mult)</label>
+        <input type="range" min="1" max="8" step="0.25" value="4" id="FM" oninput="calc()" style="width:100%;">
+        <div class="cv" id="FM-out">4×  →  FFN hidden = 3,072</div>
+      </div>
+    </div>
+
+    <div class="stat-grid" id="stat-grid"></div>
+
+    <div style="font-size:12px;font-weight:500;color:var(--muted);margin:14px 0 8px;">Parameter breakdown</div>
+    <div id="param-bars"></div>
+
+    <div style="font-size:12px;font-weight:500;color:var(--muted);margin:14px 0 6px;">Tensor shapes — one forward pass (B = batch size)</div>
+    <div id="shape-flow"></div>
+
+    <div class="warn-box" id="warn-box"></div>
+  </div>
+
+  <h2>Every dimension explained</h2>
+
+  <div class="dim-card" style="--dc:#BA7517;">
+    <h3>V — Vocabulary size</h3>
+    <div class="dim-alias">also: vocab_size</div>
+    <p>Before any neural network runs, text is split into subword tokens and each is mapped to an integer ID from 0 to V−1. V is how many distinct tokens exist. GPT-2: V = 50,257. LLaMA: V = 32,000. Larger vocabulary means fewer tokens per sentence (more efficient), but a bigger embedding table and LM head.</p>
+    <p>Every forward pass starts as integers in [0, V) and ends as a probability distribution over V options. V directly sets the size of the two most expensive weight matrices: the embedding table (V × D) and the LM head (D × V).</p>
+  </div>
+
+  <div class="dim-card" style="--dc:#185FA5;">
+    <h3>D — Model dimension</h3>
+    <div class="dim-alias">also: d_model · hidden_size · embedding_dim · n_embd</div>
+    <p>The single most important number. Every token is represented as a vector of <strong>D floating-point numbers</strong> as it flows through the entire network. D is the width of the residual stream. Every sub-layer reads D numbers in and writes D numbers out — the shape [B, T, D] never changes across all L blocks. Only the content changes as information accumulates.</p>
+    <p>GPT-2 Small: D = 768. GPT-3: D = 12,288. LLaMA-7B: D = 4,096. LLaMA-70B: D = 8,192.</p>
+    <p>Doubling D roughly <strong>quadruples parameters and FLOPs</strong> — every weight matrix is proportional to D² (attention has 4D², FFN has ~8D²). D is the primary lever for scaling model capacity.</p>
+  </div>
+
+  <div class="dim-card" style="--dc:#534AB7;">
+    <h3>L — Number of layers</h3>
+    <div class="dim-alias">also: n_layers · num_hidden_layers · depth</div>
+    <p>How many transformer blocks are stacked sequentially. Each block contains one attention sub-layer and one FFN sub-layer, both wrapped in residual connections. The token representations flow through all L blocks one by one.</p>
+    <p>GPT-2 Small: L = 12. GPT-3: L = 96. LLaMA-7B: L = 32. LLaMA-70B: L = 80.</p>
+    <p>Increasing L adds parameters <strong>linearly</strong>. But depth also gives the model more sequential "reasoning steps" — a deeper model can do more multi-step processing even at the same parameter count as a wider but shallower model. Modern practice balances both. Early layers tend to handle syntax and local patterns; later layers handle semantics and long-range reasoning.</p>
+  </div>
+
+  <div class="dim-card" style="--dc:#7F77DD;">
+    <h3>H — Number of attention heads</h3>
+    <div class="dim-alias">also: n_heads · num_attention_heads</div>
+    <p>Each transformer block runs self-attention <strong>H times in parallel</strong>, each time using a different learned projection of Q, K, V. Different heads specialise in different relationships — one might track syntactic subject-verb agreement, another coreference ("it" referring to an earlier noun), another positional proximity.</p>
+    <p><strong>Key constraint: D must be divisible by H.</strong> The model dimension is split evenly across heads: <code>head_dim = D / H</code>. GPT-2 Small: H = 12, head_dim = 64. LLaMA-70B: H = 64, head_dim = 128.</p>
+    <p>Head dimension is almost always 64 or 128 in practice — these sizes work well with GPU tensor cores and have been empirically validated. You rarely want head_dim below 32 or above 256.</p>
+  </div>
+
+  <div class="dim-card" style="--dc:#0F6E56;">
+    <h3>head_dim — Head dimension</h3>
+    <div class="dim-alias">also: d_head · head_size  |  derived: head_dim = D / H</div>
+    <p>The dimension of the space each attention head works in. Inside each head, Q and K are head_dim-dimensional vectors. The attention score between two tokens is their dot product divided by <strong>√head_dim</strong>. This scaling is critical — without it, dot products grow large, softmax saturates (all attention goes to one token), and gradients vanish.</p>
+    <p>After all H heads compute their weighted sums, results are concatenated back to D dimensions and projected through Wₒ. The full attention path is: D → split into H × head_dim → attend per head → concat → project → D.</p>
+  </div>
+
+  <div class="dim-card" style="--dc:#BA7517;">
+    <h3>d_ffn — FFN hidden dimension</h3>
+    <div class="dim-alias">also: intermediate_size · ffn_dim · d_inner  |  typically 4×D or 8/3×D</div>
+    <p>Inside the feed-forward network, each token vector expands from D to d_ffn (gaining compute depth), then contracts back to D. Classic transformers use 4×D (GPT-2: 768 → 3,072 → 768). LLaMA uses SwiGLU with 8/3×D to keep the parameter count equal despite using two projection matrices.</p>
+    <p>The FFN is where the model stores factual "knowledge" — think of each FFN layer as a key-value memory bank. Wider FFN = more storage capacity. The FFN contains roughly <strong>two-thirds of all parameters</strong> in a standard transformer (attention has 4D², FFN has ~8D² with a 4× multiplier).</p>
+  </div>
+
+  <div class="dim-card" style="--dc:#993C1D;">
+    <h3>T — Context length (sequence length)</h3>
+    <div class="dim-alias">also: seq_len · max_position_embeddings · context_window</div>
+    <p>How many tokens the model processes at once. This is the length of the sequence dimension in every tensor. Attention computes a T×T score matrix — every token attending to every other token. This is why attention is <strong>O(T²)</strong> in compute and memory — doubling context quadruples the attention cost.</p>
+    <p>GPT-2: T = 1,024. GPT-3: T = 2,048. LLaMA-2: T = 4,096. LLaMA-3: T = 128,000 (with RoPE scaling).</p>
+    <p>Context length determines how much text the model can "see" at once, the size of the [B, H, T, T] attention score matrix, and the size of the KV cache during inference.</p>
+  </div>
+
+  <div class="dim-card" style="--dc:#D85A30;">
+    <h3>KV cache</h3>
+    <div class="dim-alias">size = 2 × L × T × D × bytes_per_value</div>
+    <p>During generation, the model produces one token at a time. Without caching, you'd recompute K and V for all previous tokens at every step — wasteful. The KV cache stores the K and V tensors for every already-generated token, for every layer. Each new token only needs to compute its own K and V.</p>
+    <p>For LLaMA-7B at T = 4,096 in float16: 2 × 32 × 4,096 × 4,096 × 2 bytes ≈ <strong>2 GB</strong> — just for the cache, on top of the ~14 GB model weights. Long contexts are expensive because the cache grows linearly with sequence length and must fit in GPU memory alongside the model.</p>
+  </div>
+
+  <div class="dim-card" style="--dc:#5F5E5A;">
+    <h3>B — Batch size</h3>
+    <div class="dim-alias">always the first dimension: [B, T, D]</div>
+    <p>How many independent sequences are processed simultaneously in one forward pass. During training: B = 32 to 4,096+ (larger batches = more stable gradients, better GPU utilisation, but more memory). During single-user inference: B = 1. The batch dimension is always first in every tensor and never affects the model's logic — it's just parallelism.</p>
+  </div>
+
+  <h2>Where every parameter lives</h2>
+
+  <div class="param-formula"><span class="cm">── Input/output ───────────────────────────────────────</span>
+Embedding table:       V × D
+Positional embeddings: T × D      (if learned; 0 for RoPE)
+LM head:               D × V      (often weight-tied → 0 extra)
+
+<span class="cm">── Per transformer block (× L) ────────────────────────</span>
+Attention Wq:          D × D
+Attention Wk:          D × D
+Attention Wv:          D × D
+Attention Wo:          D × D      total: 4 × D²
+
+FFN W1:                D × d_ffn
+FFN W2:                d_ffn × D  total: 2 × D × d_ffn
+
+LayerNorm (×2):        4 × D      (γ and β, twice per block)
+
+<span class="cm">── Total ───────────────────────────────────────────────</span>
+Total = V×D + L×(4D² + 2×D×d_ffn + 4D) + D×V</div>
+
+  <h2>The full shape flow</h2>
+  <p>Tracing a single sequence through a model with D=4096, H=32, L=32, V=32000, T=4096:</p>
+
+  <pre><code>Input:      [B, T]              = [1, 4096]   integer token IDs
+
+Embed:      [B, T, D]           = [1, 4096, 4096]
++ pos enc:  [B, T, D]           = [1, 4096, 4096]   shape unchanged
+
+Per block (× 32):
+  Q,K,V:    [B, H, T, head_dim] = [1, 32, 4096, 128]
+  Scores:   [B, H, T, T]        = [1, 32, 4096, 4096]  ← O(T²) cost
+  Attn out: [B, T, D]           = [1, 4096, 4096]
+  FFN mid:  [B, T, d_ffn]       = [1, 4096, 10922]
+  FFN out:  [B, T, D]           = [1, 4096, 4096]
+
+LM head:    [B, T, V]           = [1, 4096, 32000]
+Softmax:    [B, T, V]           = [1, 4096, 32000]   probabilities</code></pre>
+
+  <div class="card-green">
+    <strong>The key insight:</strong> the shape [B, T, D] is the skeleton of the whole transformer — it never changes across all L blocks. Only the content of those D numbers changes as each block enriches the representations. The residual stream is the river; each block is a tributary adding information to it.
+  </div>
+
+  <h2>Real model configs at a glance</h2>
+  <dl class="key-concept">
+    <dt>GPT-2 Small</dt><dd>D=768, H=12, L=12, V=50257, T=1024 → 117M params</dd>
+    <dt>GPT-2 Large</dt><dd>D=1280, H=20, L=36, V=50257, T=1024 → 774M params</dd>
+    <dt>GPT-3 175B</dt><dd>D=12288, H=96, L=96, V=50257, T=2048 → 175B params</dd>
+    <dt>LLaMA-7B</dt><dd>D=4096, H=32, L=32, V=32000, T=4096, SwiGLU → 7B params</dd>
+    <dt>LLaMA-70B</dt><dd>D=8192, H=64, L=80, V=32000, T=4096, GQA → 70B params</dd>
+    <dt>head_dim rule</dt><dd>Almost always 64 or 128. Chosen to be hardware-friendly and empirically stable.</dd>
+    <dt>FFN ratio</dt><dd>4× for classic transformers (GPT). 8/3× for SwiGLU models (LLaMA). Both give similar parameter counts per block.</dd>
+    <dt>GQA</dt><dd>Grouped Query Attention — used in LLaMA-2-70B and Mistral. Fewer K,V heads than Q heads (e.g. 8 KV heads for 64 Q heads), shrinking the KV cache dramatically with minimal quality loss.</dd>
+  </dl>
+
+</div>
+
+<script>
+const PRESETS = [
+  {name:'GPT-2 S',   D:768,  H:12, L:12, V:50257,  T:1024,  FM:4},
+  {name:'GPT-2 L',   D:1280, H:20, L:36, V:50257,  T:1024,  FM:4},
+  {name:'GPT-3',     D:12288,H:96, L:96, V:50257,  T:2048,  FM:4},
+  {name:'LLaMA-7B',  D:4096, H:32, L:32, V:32000,  T:4096,  FM:2.67},
+  {name:'LLaMA-70B', D:8192, H:64, L:80, V:32000,  T:4096,  FM:2.67},
+];
+
+const PCOLS = {embed:'#185FA5', attn:'#7F77DD', ffn:'#BA7517', norm:'#0F6E56', other:'#5F5E5A'};
+
+function fmt(n) {
+  if(n>=1e12) return(n/1e12).toFixed(2)+'T';
+  if(n>=1e9)  return(n/1e9).toFixed(2)+'B';
+  if(n>=1e6)  return(n/1e6).toFixed(2)+'M';
+  if(n>=1e3)  return(n/1e3).toFixed(1)+'K';
+  return Math.round(n).toLocaleString();
+}
+function fmtB(n) {
+  if(n>=1e9) return(n/1e9).toFixed(2)+' GB';
+  if(n>=1e6) return(n/1e6).toFixed(2)+' MB';
+  return(n/1e3).toFixed(1)+' KB';
+}
+
+function calc() {
+  const D  = parseInt(document.getElementById('D').value);
+  const H  = parseInt(document.getElementById('H').value);
+  const L  = parseInt(document.getElementById('L').value);
+  const V  = parseInt(document.getElementById('V').value);
+  const T  = parseInt(document.getElementById('T').value);
+  const FM = parseFloat(document.getElementById('FM').value);
+
+  const headDim = Math.floor(D / H);
+  const ffnH    = Math.round(D * FM);
+
+  document.getElementById('D-out').textContent  = D.toLocaleString();
+  document.getElementById('H-out').textContent  = `${H}  →  head_dim = ${headDim}`;
+  document.getElementById('L-out').textContent  = L;
+  document.getElementById('V-out').textContent  = V.toLocaleString();
+  document.getElementById('T-out').textContent  = T.toLocaleString();
+  document.getElementById('FM-out').textContent = `${FM}×  →  FFN hidden = ${ffnH.toLocaleString()}`;
+
+  const pEmbed   = V * D;
+  const pPos     = T * D;
+  const pAttn    = 4 * D * D;
+  const pFFN     = 2 * D * ffnH;
+  const pNorm    = 4 * D;
+  const pBlock   = pAttn + pFFN + pNorm;
+  const pLMHead  = D * V;
+  const pTotal   = pEmbed + pPos + L * pBlock + pLMHead;
+
+  const flopsAttn  = 4 * T * D * D + 2 * T * T * D;
+  const flopsFFN   = 4 * T * D * ffnH;
+  const flopsTotal = L * (flopsAttn + flopsFFN);
+
+  const kvBytes = 2 * L * T * D * 2;
+  const attnMat = H * T * T * 2;
+
+  document.getElementById('stat-grid').innerHTML = [
+    {l:'Total params',      v:fmt(pTotal),           hi:true},
+    {l:'Params per block',  v:fmt(pBlock)},
+    {l:'Head dimension',    v:headDim},
+    {l:'FFN hidden size',   v:ffnH.toLocaleString()},
+    {l:'FLOPs / fwd pass',  v:fmt(flopsTotal),       hi:true},
+    {l:'KV cache (fp16)',   v:fmtB(kvBytes),         hi:true},
+    {l:'Attn score matrix', v:`${T}×${T} per head`},
+    {l:'Weights (fp16)',    v:fmtB(pTotal * 2)},
+  ].map(({l,v,hi})=>
+    `<div class="stat-card${hi?' hi':''}"><div class="sl">${l}</div><div class="sv">${v}</div></div>`
+  ).join('');
+
+  const parts = [
+    {label:'Token embedding',          params:pEmbed,    color:PCOLS.embed},
+    {label:`Attention × ${L} layers`,  params:L*pAttn,   color:PCOLS.attn},
+    {label:`FFN × ${L} layers`,        params:L*pFFN,    color:PCOLS.ffn},
+    {label:`LayerNorm × ${L} layers`,  params:L*pNorm,   color:PCOLS.norm},
+    {label:'LM head',                  params:pLMHead,   color:PCOLS.other},
+  ];
+  document.getElementById('param-bars').innerHTML = parts.map(({label,params,color}) => {
+    const pct = Math.max(1, Math.round(params / pTotal * 100));
+    return `<div class="pbar-wrap">
+      <div class="pbar-title"><span>${label}</span><span style="font-family:var(--mono);">${fmt(params)} (${pct}%)</span></div>
+      <div class="pbar-bg"><div class="pbar-fill" style="width:${pct}%;background:${color};"></div></div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('shape-flow').innerHTML = [
+    ['Input token IDs',                `[B, T]`,                    'integer token IDs, T = ' + T.toLocaleString()],
+    ['After token embedding',          `[B, T, D]`,                 `each token → ${D}-dim vector`],
+    ['After positional encoding',      `[B, T, D]`,                 'shape unchanged, values enriched'],
+    ['Q, K, V projections (per head)', `[B, H, T, head_dim]`,       `${H} heads × ${headDim} dims`],
+    ['Attention score matrix',         `[B, H, T, T]`,              `every token attends to every token — O(T²)`],
+    ['After attention + Add&Norm',     `[B, T, D]`,                 'context-enriched, back to D'],
+    ['FFN expansion',                  `[B, T, d_ffn]`,             `expanded to ${ffnH.toLocaleString()}`],
+    ['After FFN + Add&Norm',           `[B, T, D]`,                 'block output, D = ' + D.toLocaleString()],
+    [`After all ${L} blocks`,          `[B, T, D]`,                 'residual stream final state'],
+    ['LM head projection',             `[B, T, V]`,                 `one raw score per vocab token — V = ${V.toLocaleString()}`],
+    ['After softmax',                  `[B, T, V]`,                 'probabilities, sum to 1.0'],
+  ].map(([name, shape, note]) =>
+    `<div class="sf-row"><div class="sf-name">${name}</div><div class="sf-shape">${shape}</div><span class="sf-note">${note}</span></div>`
+  ).join('');
+
+  const warns = [];
+  if (D % H !== 0) warns.push(`⚠ D (${D}) must be divisible by H (${H}) — head_dim = ${D/H} is not an integer.`);
+  if (headDim < 16) warns.push(`⚠ head_dim = ${headDim} is very small — attention will likely underfit.`);
+  if (pTotal > 70e9) warns.push(`ℹ Model has ${fmt(pTotal)} params — needs tensor parallelism across multiple GPUs.`);
+  if (attnMat > 4e9) warns.push(`ℹ Attention matrix is ${fmtB(attnMat)} — long context requires flash attention or similar.`);
+  document.getElementById('warn-box').innerHTML = warns.length
+    ? warns.join('<br>')
+    : 'Configuration looks valid. All dimensions are consistent.';
+}
+
+const pw = document.getElementById('presets');
+PRESETS.forEach(p => {
+  const b = document.createElement('button');
+  b.textContent = p.name;
+  b.style.cssText = 'font-size:12px;padding:4px 12px;';
+  b.onclick = () => {
+    document.getElementById('D').value  = p.D;
+    document.getElementById('H').value  = p.H;
+    document.getElementById('L').value  = p.L;
+    document.getElementById('V').value  = p.V;
+    document.getElementById('T').value  = p.T;
+    document.getElementById('FM').value = p.FM;
+    calc();
+  };
+  pw.appendChild(b);
+});
+
+calc();
+</script>
+</body>
+</html>
