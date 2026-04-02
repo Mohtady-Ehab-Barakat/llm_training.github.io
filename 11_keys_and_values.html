@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>11 — Keys & Values · LLM Notes</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .tok2 { display:inline-flex; align-items:center; justify-content:center; min-width:64px; height:36px; border-radius:6px; font-size:13px; font-weight:500; border:1.5px solid; cursor:pointer; padding:0 10px; transition:all .2s; user-select:none; }
+  .tok2:hover { filter:brightness(1.1); }
+
+  .kv-row { display:flex; align-items:center; gap:6px; margin-bottom:5px; }
+  .kv-label { font-size:11px; color:var(--muted); width:20px; flex-shrink:0; font-family:var(--mono); }
+  .kv-name { width:48px; font-size:12px; font-weight:500; flex-shrink:0; }
+  .bar-bg { flex:1; height:18px; background:var(--bg3); border-radius:4px; overflow:hidden; }
+  .bar-fill { height:100%; border-radius:4px; transition:width .35s; }
+  .bar-val { font-size:11px; font-family:var(--mono); min-width:48px; text-align:right; color:var(--muted); }
+  .bar-val-hi { font-size:11px; font-family:var(--mono); min-width:48px; text-align:right; font-weight:500; }
+
+  .step-pill { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:50%; font-size:11px; font-weight:500; flex-shrink:0; }
+
+  .step-btn { padding:5px 12px; border-radius:6px; font-size:11px; font-weight:500; cursor:pointer; border:1px solid var(--border); background:var(--bg2); color:var(--muted); transition:all .13s; white-space:nowrap; }
+  .step-btn:hover { background:var(--bg3); color:var(--text); }
+  .step-btn.active { background:#0C2244; border-color:#185FA5; color:#85B7EB; }
+
+  .mat-wrap { display:inline-block; flex-shrink:0; }
+  .mat-label { font-size:11px; font-family:var(--mono); color:var(--muted); text-align:center; margin-bottom:4px; }
+  .mat-grid { display:inline-grid; gap:2px; }
+  .mat-cell { width:42px; height:28px; border-radius:4px; display:flex; align-items:center; justify-content:center; font-size:11px; font-family:var(--mono); font-weight:500; }
+  .eq-sym { font-size:20px; color:var(--muted); padding:0 4px; align-self:center; flex-shrink:0; }
+
+  .step-card { background:var(--bg2); border:0.5px solid var(--border); border-left:3px solid #185FA5; border-radius:0 var(--radius) var(--radius) 0; padding:12px 16px; font-size:12px; color:var(--muted); line-height:1.7; flex:1; min-width:180px; }
+  .step-card strong { color:var(--text); font-weight:500; }
+  .step-card code { font-size:11px; }
+
+  .mats-row { display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap; margin-bottom:8px; }
+</style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <nav class="nav">
+    <a class="nav-home" href="index.html">← LLM Notes</a>
+    <span class="nav-title">11 / Keys & Values — Q, K, V deep dive</span>
+  </nav>
+
+  <div class="page-header">
+    <div class="tag">Attention</div>
+    <h1>Keys & Values — Q, K, V</h1>
+    <p class="subtitle">Where they come from · what they are · the full computation · multi-head · KV cache · GQA</p>
+  </div>
+
+  <h2>The problem attention solves</h2>
+  <p>Each token starts with an embedding vector — D numbers encoding its meaning. But meaning is context-dependent: "bank" in "river bank" vs "savings bank" should produce different representations. After the embedding lookup, every "bank" token has the <em>same</em> vector regardless of context. Attention lets each token update its representation by reading information from other tokens in the sequence.</p>
+
+  <h2>The database analogy</h2>
+  <p>The best mental model for attention is a soft, differentiable database lookup. In a real database you have a query, a set of keys to match against, and values to retrieve. The match is hard — one key wins. Attention does the same thing but softly: every key gets a score, softmax converts scores into weights summing to 1, and you get back a weighted blend of all values:</p>
+
+  <pre><code># Hard database lookup
+query = "find me animal records"
+keys  = ["animals", "weather", "finance"]
+→ return values["animals"]   # 100% one winner
+
+# Soft attention lookup
+→ return 0.72×V_animals + 0.18×V_weather + 0.10×V_finance</code></pre>
+
+  <p>Q (Query), K (Key), V (Value) are the neural network version of this. Q is what you're looking for. K is what each token advertises. V is what each token contributes when selected.</p>
+
+  <h2>Widget 1 — soft retrieval intuition</h2>
+  <p>Click any token to make it the Query. Watch how it scores all Keys, how softmax normalises those scores into attention weights, and how the output is a blend of Value vectors weighted by attention.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">Click a token to be the Query — it searches through all Keys</div>
+    <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:14px;" id="tok-row"></div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;">
+      <div style="flex:1;min-width:200px;">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+          <div class="step-pill" style="background:#0C2244;color:#85B7EB;">1</div>
+          <span style="font-size:12px;color:var(--muted);">Q·K scores — how relevant is each token?</span>
+        </div>
+        <div id="score-section"></div>
+        <div style="display:flex;align-items:center;gap:6px;margin:12px 0 8px;">
+          <div class="step-pill" style="background:#04342C;color:#5DCAA5;">2</div>
+          <span style="font-size:12px;color:var(--muted);">After softmax — attention weights (sum = 1)</span>
+        </div>
+        <div id="attn-section"></div>
+      </div>
+      <div style="flex:1;min-width:200px;">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+          <div class="step-pill" style="background:#26215C;color:#CECBF6;">3</div>
+          <span style="font-size:12px;color:var(--muted);">Values blended by weights → output</span>
+        </div>
+        <div id="value-section"></div>
+        <div style="margin-top:10px;background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--muted);line-height:1.65;" id="insight-box"></div>
+      </div>
+    </div>
+  </div>
+
+  <h2>Where Q, K, V actually come from</h2>
+  <p>The input to the attention block is the residual stream: a matrix X of shape [T, D] — one D-dimensional vector per token. This <em>same X</em> produces all three of Q, K, and V by multiplying through three separate learned weight matrices:</p>
+
+  <pre><code>Q = X · Wq      # [T, D] × [D, Dh] = [T, Dh]   "what do I need?"
+K = X · Wk      # [T, D] × [D, Dh] = [T, Dh]   "what do I advertise?"
+V = X · Wv      # [T, D] × [D, Dh] = [T, Dh]   "what do I contribute?"</code></pre>
+
+  <p>Wq, Wk, Wv are weight matrices with their own learned values, updated during training. Every token is simultaneously a querier (via its Q), a key-provider (via its K), and a value-provider (via its V). When token i attends to token j, it uses its own Q to search, matches against j's K, and takes j's V as the payload.</p>
+
+  <h2>Widget 2 — full computation step by step</h2>
+  <p>Step through the 7 stages of the attention computation with real numbers. Each matrix cell is colour-coded by value (blue = high, red = low).</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">Step through the full Q·K·V computation</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;" id="step-btns"></div>
+    <div id="step-content"></div>
+  </div>
+
+  <h2>What K is — and why it exists separately from V</h2>
+  <p>K is the "advertisement" each token broadcasts. When Wk projects X into key space, it learns to answer: "if another token is searching, what label should I put on myself?" The key for a verb might encode "I am an action." The key for a pronoun might encode "I am a reference needing resolution."</p>
+  <p>K is <em>never used as content</em> — it only participates in the scoring computation Q·Kᵀ. Its sole job is to be findable. Whether you find it depends on how well the Q vector (the searcher) aligns with the K vector (the label).</p>
+
+  <div class="card-accent">
+    <strong>Why split K and V?</strong> The label a token advertises (K) and the content it contributes (V) don't need to encode the same thing. A token might advertise "I am a subject noun" via K while contributing rich semantic information via V. The model learns to search with one representation and retrieve with another — like a library where the card catalogue keywords (K) differ from the book's contents (V).
+  </div>
+
+  <h2>What V is — the actual payload</h2>
+  <p>V is the content that gets collected when a token is attended to. After softmax gives attention weights, the output for token i is the weighted sum of all V vectors:</p>
+
+  <pre><code>output[i] = Σⱼ  weight[i,j] × V[j]</code></pre>
+
+  <p>Token i's output is a blend of every token's value vector, weighted by how well each key matched the query. High attention weight on token j means j's V vector contributes heavily to i's new representation. This is how contextual information flows — "cat" can absorb information from "sat" and "mat" to become a context-aware representation of a cat-sitting-on-mat.</p>
+
+  <h2>The full computation — all steps</h2>
+
+  <pre><code># All attention operations for one head:
+
+Q = X @ Wq                         # [T, Dh]  project to query space
+K = X @ Wk                         # [T, Dh]  project to key space
+V = X @ Wv                         # [T, Dh]  project to value space
+
+scores = Q @ K.T / sqrt(Dh)        # [T, T]   score every pair
+# causal mask: scores[i,j] = -inf for j > i  (decoder-only)
+
+weights = softmax(scores, dim=-1)  # [T, T]   normalise to sum=1
+
+output = weights @ V               # [T, Dh]  weighted value blend
+output = output @ Wo               # [T, D]   project back to D</code></pre>
+
+  <h2>Why divide by √D_head?</h2>
+  <p>The dot product Q·K sums D_head multiplications. As D_head grows, the variance of the dot products grows proportionally — large scores make softmax peak sharply toward one token, destroying gradient flow (softmax gradient near saturation ≈ 0). Dividing by √D_head keeps scores in a sensible variance range. For D_head = 64, you divide by 8. For D_head = 128, you divide by ~11.3.</p>
+
+  <h2>Multi-head attention — running this H times</h2>
+  <p>A single head can only attend to one type of relationship at a time. Multi-head attention runs H independent attention operations in parallel, each with its own Wq, Wk, Wv:</p>
+
+  <pre><code>head_dim = D / H   # D split evenly across heads
+
+for h in range(H):
+    Qh = X @ Wq_h                              # [T, head_dim]
+    Kh = X @ Wk_h                              # [T, head_dim]
+    Vh = X @ Wv_h                              # [T, head_dim]
+    head_h = softmax(Qh @ Kh.T / √head_dim) @ Vh
+
+output = concat(head_0, ..., head_H-1) @ Wo   # [T, D]</code></pre>
+
+  <p>Head 0 might track subject-verb agreement. Head 1 might track pronoun-antecedent links. Head 7 might track semantic similarity. The model learns to specialise each head through gradient descent. Wo blends all heads back into the unified D-dimensional residual stream.</p>
+
+  <h2>The KV cache — why K and V are stored during inference</h2>
+  <p>During autoregressive generation (one token at a time), at each new step you already have K and V for all past tokens — their source token representations haven't changed. Recomputing them is wasteful. The KV cache stores K and V for every past token, every layer:</p>
+
+  <pre><code>Cache size = 2 × L × T × D × bytes_per_value
+             ↑      ↑   ↑   ↑
+           K&V   layers seq width
+
+# LLaMA-7B at T=4096, fp16:
+# 2 × 32 × 4096 × 4096 × 2 = ~2 GB</code></pre>
+
+  <p>At each new token: compute only the new token's K and V, append them to the cache, then compute attention between the new Q and all cached Ks. This reduces attention from O(T²) per step to O(T) — the main reason modern LLM inference is fast. The Q of the new token is computed fresh every step and never cached (used once and discarded).</p>
+
+  <div class="card-green">
+    <strong>Q is never cached. K and V always are.</strong> Q is the "searcher" — it changes every step as the new token's needs change. K and V are the "database" — past tokens' advertisements and payloads are fixed once generated. This asymmetry is why the operation is called a <em>Key-Value cache</em>, not a QKV cache.
+  </div>
+
+  <h2>GQA and MQA — sharing K and V across heads</h2>
+  <p>Standard MHA has H separate Wq, Wk, Wv per head. The KV cache grows linearly with H. Multi-Query Attention (MQA) shares one single K and V across all H query heads. Grouped Query Attention (GQA) uses G groups of shared KV for H Q heads, where G &lt; H:</p>
+
+  <pre><code>MHA (standard): H separate (Wq, Wk, Wv) — KV cache ∝ H
+MQA:            H Wq, but only 1 shared (Wk, Wv) — KV cache ÷ H
+GQA (G groups): H Wq, G shared (Wk, Wv) — KV cache ÷ (H/G)
+
+# LLaMA-70B: H=64 Q heads, G=8 KV groups
+# KV cache is 8× smaller than standard MHA
+# Quality loss: nearly zero</code></pre>
+
+  <p>LLaMA-2-70B, Mistral-7B, and most modern efficient LLMs use GQA. It's the primary technique for fitting long contexts in GPU memory without sacrificing model quality.</p>
+
+  <dl class="key-concept">
+    <dt>Q — Query</dt><dd>What this token is looking for. Computed as X·Wq. Used only in Q·Kᵀ scoring. Never cached.</dd>
+    <dt>K — Key</dt><dd>What this token advertises. Computed as X·Wk. Used only in Q·Kᵀ scoring. Always cached after first computation.</dd>
+    <dt>V — Value</dt><dd>What this token contributes when attended to. Computed as X·Wv. Collected as a weighted sum. Always cached.</dd>
+    <dt>Wq, Wk, Wv</dt><dd>Three independent learned [D, D_head] weight matrices. Their job is to project the same X into three different useful spaces.</dd>
+    <dt>Wo</dt><dd>Output projection [D_head × H, D]. Blends all heads back to D and writes into the residual stream.</dd>
+    <dt>Scaled dot-product</dt><dd>Q·Kᵀ / √D_head. Scaling prevents softmax saturation at large head dimensions.</dd>
+    <dt>Causal mask</dt><dd>Sets future positions to −∞ before softmax so each token can only attend to past tokens. Used in all decoder-only LLMs (GPT, LLaMA).</dd>
+    <dt>KV cache</dt><dd>Stored K and V for all past tokens, all layers. Enables O(T) per-step inference instead of O(T²). Size = 2·L·T·D·dtype_bytes.</dd>
+    <dt>MHA</dt><dd>Multi-Head Attention — H independent heads, each with own Wq, Wk, Wv.</dd>
+    <dt>MQA</dt><dd>Multi-Query Attention — H Q heads sharing one K, V. Shrinks KV cache by H×.</dd>
+    <dt>GQA</dt><dd>Grouped Query Attention — H Q heads sharing G KV groups (G &lt; H). Used in LLaMA-2-70B, Mistral.</dd>
+  </dl>
+
+</div>
+
+<script>
+const TOKENS = [
+  {word:'The',  color:'#185FA5', meaning:'definite article — points to specific noun'},
+  {word:'cat',  color:'#0F6E56', meaning:'subject — the animal doing the action'},
+  {word:'sat',  color:'#BA7517', meaning:'verb — the action being performed'},
+  {word:'on',   color:'#7F77DD', meaning:'preposition — links verb to location'},
+  {word:'mat',  color:'#993C1D', meaning:'object — the location of the action'},
+];
+const N = TOKENS.length;
+const rng = s => { let x = Math.sin(s) * 10000; return x - Math.floor(x); };
+const K_vecs = TOKENS.map((_,i) => Array.from({length:4}, (_,d) => rng(i*17+d*31)*2-1));
+const V_vecs = TOKENS.map((_,i) => Array.from({length:6}, (_,d) => rng(i*53+d*97)*2-1));
+const Q_vecs = TOKENS.map((_,i) => Array.from({length:4}, (_,d) => rng(i*79+d*43)*2-1));
+function dotv(a,b){return a.reduce((s,x,i)=>s+x*b[i],0);}
+function softmax(arr){const m=Math.max(...arr),e=arr.map(x=>Math.exp(x-m)),s=e.reduce((a,b)=>a+b,0);return e.map(x=>x/s);}
+
+let sel = 1;
+function renderRetrieval() {
+  const q = Q_vecs[sel];
+  const scores = K_vecs.map(k => dotv(q,k)/Math.sqrt(4));
+  const weights = softmax(scores);
+  const output = Array(6).fill(0);
+  weights.forEach((w,i) => V_vecs[i].forEach((v,d) => output[d] += w*v));
+
+  document.getElementById('tok-row').innerHTML = TOKENS.map((t,i) =>
+    `<div class="tok2" style="border-color:${t.color};color:${i===sel?'#fff':t.color};background:${i===sel?t.color:t.color+'16'};" onclick="sel=${i};renderRetrieval();">${t.word}${i===sel?' (Q)':''}</div>`
+  ).join('');
+
+  const maxS = Math.max(...scores.map(Math.abs));
+  document.getElementById('score-section').innerHTML = TOKENS.map((t,i) => {
+    const pct = Math.round((scores[i]+maxS)/(2*maxS)*100);
+    return `<div class="kv-row">
+      <div class="kv-label">K${i}</div>
+      <div class="kv-name" style="color:${t.color};">${t.word}</div>
+      <div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:${t.color}88;"></div></div>
+      <div class="bar-val">${scores[i].toFixed(2)}</div>
+    </div>`;
+  }).join('');
+
+  const maxW = Math.max(...weights);
+  document.getElementById('attn-section').innerHTML = TOKENS.map((t,i) => {
+    const pct = Math.round(weights[i]/maxW*100);
+    return `<div class="kv-row">
+      <div class="kv-label">w${i}</div>
+      <div class="kv-name" style="color:${t.color};">${t.word}</div>
+      <div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:${t.color};"></div></div>
+      <div class="bar-val-hi" style="color:${t.color};">${(weights[i]*100).toFixed(1)}%</div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('value-section').innerHTML =
+    `<div style="font-size:11px;color:var(--muted);margin-bottom:6px;">output = Σ weight[i] × V[i]</div>` +
+    output.map((v,d) => {
+      const pct = Math.round(Math.min(100, ((v+2)/4)*100));
+      const c = v >= 0 ? '#185FA5' : '#A32D2D';
+      return `<div class="kv-row">
+        <div class="kv-label">d${d}</div>
+        <div class="bar-bg"><div class="bar-fill" style="width:${Math.abs(pct-50)+50}%;background:${c}66;"></div></div>
+        <div class="bar-val" style="color:${c};">${v.toFixed(3)}</div>
+      </div>`;
+    }).join('');
+
+  const topI = weights.indexOf(maxW);
+  document.getElementById('insight-box').innerHTML =
+    `Query: <strong style="color:${TOKENS[sel].color};">${TOKENS[sel].word}</strong> — "${TOKENS[sel].meaning}"<br>` +
+    `Attends most to: <strong style="color:${TOKENS[topI].color};">${TOKENS[topI].word}</strong> (${(maxW*100).toFixed(1)}%)<br>` +
+    `Output = blend of all ${N} Value vectors weighted by how well each Key matched the Query.`;
+}
+renderRetrieval();
+window.sel = sel;
+window.renderRetrieval = renderRetrieval;
+
+const dark = window.matchMedia('(prefers-color-scheme:dark)').matches;
+const T2=4, D2=4, Dh=4;
+const rng2 = (s) => { let x = Math.sin(s*127.1+83.7)*43758.5453; return x-Math.floor(x); };
+const rand = (s,lo,hi) => lo+(hi-lo)*rng2(s);
+const X2 = Array.from({length:T2},(_,i)=>Array.from({length:D2},(_,j)=>parseFloat(rand(i*D2+j,-.9,.9).toFixed(2))));
+const Wq2= Array.from({length:D2},(_,i)=>Array.from({length:Dh},(_,j)=>parseFloat(rand(100+i*Dh+j,-.6,.6).toFixed(2))));
+const Wk2= Array.from({length:D2},(_,i)=>Array.from({length:Dh},(_,j)=>parseFloat(rand(200+i*Dh+j,-.6,.6).toFixed(2))));
+const Wv2= Array.from({length:D2},(_,i)=>Array.from({length:Dh},(_,j)=>parseFloat(rand(300+i*Dh+j,-.6,.6).toFixed(2))));
+
+function mm(A,B){return A.map(row=>B[0].map((_,j)=>parseFloat(row.reduce((s,_,k)=>s+row[k]*B[k][j],0).toFixed(2))));}
+function sm(row){const m=Math.max(...row),e=row.map(x=>Math.exp(x-m)),s=e.reduce((a,b)=>a+b,0);return e.map(x=>parseFloat((x/s).toFixed(3)));}
+function tp(M){return M[0].map((_,j)=>M.map(r=>r[j]));}
+
+const Q2=mm(X2,Wq2), K2=mm(X2,Wk2), V2=mm(X2,Wv2), Kt2=tp(K2);
+const sc = Q2.map(qr => Kt2[0].map((_,j) => parseFloat((qr.reduce((s,_,k)=>s+qr[k]*Kt2[k][j],0)/Math.sqrt(Dh)).toFixed(3))));
+const wt = sc.map(row => sm(row));
+const Out2 = mm(wt, V2);
+
+function vc(v, lo, hi) {
+  const t = (v-lo)/(hi-lo+1e-6);
+  if(dark) {
+    if(t>0.6) return {bg:`rgba(24,95,165,${0.15+t*0.55})`,fg:'#B5D4F4'};
+    if(t<0.4) return {bg:`rgba(163,45,45,${0.15+(1-t)*0.55})`,fg:'#F7C1C1'};
+    return {bg:'rgba(255,255,255,0.05)',fg:'rgba(255,255,255,0.45)'};
+  }
+  if(t>0.6) return {bg:`rgba(24,95,165,${0.08+t*0.25})`,fg:'#042C53'};
+  if(t<0.4) return {bg:`rgba(163,45,45,${0.08+(1-t)*0.25})`,fg:'#501313'};
+  return {bg:'rgba(0,0,0,0.04)',fg:'rgba(0,0,0,0.4)'};
+}
+
+function matHtml(M, label, cfn) {
+  const flat=M.flat(), lo=Math.min(...flat), hi=Math.max(...flat);
+  const cells = M.map(row => row.map(v => {
+    const {bg,fg} = cfn ? cfn(v,lo,hi) : {bg:'var(--bg3)',fg:'var(--muted)'};
+    return `<div class="mat-cell" style="background:${bg};color:${fg};">${v}</div>`;
+  }).join('')).join('');
+  return `<div class="mat-wrap"><div class="mat-label">${label}</div><div class="mat-grid" style="grid-template-columns:repeat(${M[0].length},42px);">${cells}</div></div>`;
+}
+
+function wcfn(v) {
+  if(dark) return {bg:`rgba(15,110,86,${v*2.8})`,fg:v>0.3?'#9FE1CB':'rgba(255,255,255,0.35)'};
+  return {bg:`rgba(15,110,86,${v*2.2})`,fg:v>0.3?'#04342C':'rgba(0,0,0,0.3)'};
+}
+
+const STEPS2 = [
+  {label:'Step 0 — input X'},
+  {label:'Step 1 — compute Q'},
+  {label:'Step 2 — compute K'},
+  {label:'Step 3 — compute V'},
+  {label:'Step 4 — scores Q·Kᵀ'},
+  {label:'Step 5 — softmax'},
+  {label:'Step 6 — output = w·V'},
+];
+
+const CONTENTS2 = [
+  () => `<div class="mats-row">${matHtml(X2,'X  [T=4, D=4]',vc)}<div class="step-card"><strong>The input matrix X</strong><br>Shape [T, D] — one D-dimensional vector per token after embedding and positional encoding. This is what flows into the attention block. The same X is used to produce all three of Q, K, and V.<br><br>In a real model D might be 4096, T might be 2048. We use T=4, D=4 so the numbers are readable.</div></div>`,
+  () => `<div class="mats-row">${matHtml(X2,'X  [4,4]',vc)}<div class="eq-sym">×</div>${matHtml(Wq2,'Wq  [D,Dh]',vc)}<div class="eq-sym">=</div>${matHtml(Q2,'Q  [4,4]',vc)}<div class="step-card"><strong>Q = X · Wq</strong><br>Wq is a learned [D, D_head] weight matrix. Multiplying X by Wq projects every token into "query space" — the question each token is asking: <em>what information do I need?</em><br><br>Wq is learned during training. Backprop teaches it to project tokens so that things needing similar information end up with similar Q vectors.</div></div>`,
+  () => `<div class="mats-row">${matHtml(X2,'X  [4,4]',vc)}<div class="eq-sym">×</div>${matHtml(Wk2,'Wk  [D,Dh]',vc)}<div class="eq-sym">=</div>${matHtml(K2,'K  [4,4]',vc)}<div class="step-card"><strong>K = X · Wk</strong><br>Wk is a completely different learned matrix. It projects every token into "key space" — what each token advertises: <em>what information do I contain?</em><br><br>K is never used as content. Its only job is to be findable by matching queries. Wq and Wk are learned together so high Q·K scores mean genuine relevance.</div></div>`,
+  () => `<div class="mats-row">${matHtml(X2,'X  [4,4]',vc)}<div class="eq-sym">×</div>${matHtml(Wv2,'Wv  [D,Dh]',vc)}<div class="eq-sym">=</div>${matHtml(V2,'V  [4,4]',vc)}<div class="step-card"><strong>V = X · Wv</strong><br>A third independent matrix. V projects every token into "value space" — <em>the actual content that gets collected</em> when this token is attended to.<br><br>The K/V split is key: K is the label on a box, V is what's inside. You search by label but read the contents. The model learns separate useful representations for both.</div></div>`,
+  () => `<div class="mats-row">${matHtml(Q2,'Q  [4,4]',vc)}<div class="eq-sym">·</div>${matHtml(Kt2,'Kᵀ  [4,4]',vc)}<div class="eq-sym">÷√${Dh}</div><div class="eq-sym">=</div>${matHtml(sc,'Scores  [T,T]',vc)}<div class="step-card"><strong>Scores = Q · Kᵀ / √Dh</strong><br>Entry [i,j] = how well token i's query matches token j's key. The result is a [T,T] matrix — every token against every other token.<br><br>We divide by √D_head to prevent scores from growing large and making softmax saturate (which kills gradients). For D_head=64 divide by 8; for 128 divide by ~11.3.</div></div>`,
+  () => `<div class="mats-row">${matHtml(sc,'Scores  [T,T]',vc)}<div class="eq-sym">→</div>${matHtml(wt,'Weights  [T,T]',wcfn)}<div class="step-card"><strong>Weights = softmax(Scores)</strong><br>Softmax is applied row by row. Each row becomes a valid probability distribution over all tokens — sums to exactly 1.0.<br><br>In decoder-only LLMs a causal mask sets the upper triangle to −∞ before softmax, forcing tokens to only attend to past positions — they can never look ahead at future tokens.</div></div>`,
+  () => `<div class="mats-row">${matHtml(wt,'Weights  [T,T]',wcfn)}<div class="eq-sym">×</div>${matHtml(V2,'V  [4,4]',vc)}<div class="eq-sym">=</div>${matHtml(Out2,'Output  [T,D]',vc)}<div class="step-card"><strong>Output = Weights · V</strong><br>Each output row is a weighted sum of all value vectors. Token i collects information from every token proportional to its attention weight on that token.<br><br>Output shape [T, D] matches input X. This gets added to the residual stream: <code>x = x + Attn(x)</code>. Attention is a soft read operation — blending contextual information into each token's representation.</div></div>`,
+];
+
+let cur2 = 0;
+function setStep(i) {
+  cur2 = i;
+  document.querySelectorAll('.step-btn').forEach((b,j) => b.classList.toggle('active', j===i));
+  document.getElementById('step-content').innerHTML = CONTENTS2[i]();
+}
+
+const bw = document.getElementById('step-btns');
+STEPS2.forEach((s,i) => {
+  const b = document.createElement('button');
+  b.className = 'step-btn'; b.textContent = s.label;
+  b.onclick = () => setStep(i); bw.appendChild(b);
+});
+setStep(0);
+</script>
+</body>
+</html>
