@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>15 — GQA & MQA · LLM Notes</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .tab { padding:5px 14px; border-radius:6px; font-size:12px; font-weight:500; cursor:pointer; border:1px solid var(--border); background:var(--bg2); color:var(--muted); transition:all .14s; white-space:nowrap; }
+  .tab:hover { background:var(--bg3); color:var(--text); }
+  .tab.on { background:#0C2244; border-color:#185FA5; color:#85B7EB; }
+
+  .hbox { border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:500; border:1.5px solid; cursor:default; user-select:none; }
+
+  .ins { background:var(--bg2); border:0.5px solid var(--border); border-radius:var(--radius); padding:10px 14px; font-size:12px; color:var(--muted); line-height:1.65; margin-top:10px; }
+  .ins strong { color:var(--text); font-weight:500; }
+
+  .chip { font-size:11px; font-family:var(--mono); background:var(--bg3); border:0.5px solid var(--border); border-radius:4px; padding:3px 9px; color:var(--muted); }
+  .chip b { color:var(--text); font-weight:500; }
+  .chip-row { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0; }
+
+  .ctrl-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px 24px; margin-bottom:14px; }
+  @media(max-width:480px){ .ctrl-grid { grid-template-columns:1fr; } }
+  .ctrl-item label { display:block; font-size:12px; color:var(--muted); margin-bottom:3px; }
+  .ctrl-item .cv { font-family:var(--mono); font-size:13px; font-weight:500; color:var(--text); margin-top:2px; }
+
+  .result-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin:12px 0; }
+  @media(max-width:480px){ .result-grid { grid-template-columns:1fr; } }
+  .rc { background:var(--bg3); border:0.5px solid var(--border); border-radius:var(--radius); padding:12px 14px; }
+  .rc.hi { border-color:#0F6E5688; background:rgba(15,110,86,0.09); }
+  .rc .rl { font-size:11px; color:var(--muted); margin-bottom:4px; }
+  .rc .rv { font-size:18px; font-weight:500; color:var(--text); font-family:var(--mono); }
+  .rc .rs { font-size:11px; color:var(--muted); margin-top:2px; }
+
+  .bar-section { margin:4px 0 10px; }
+  .bar-label { font-size:12px; color:var(--muted); display:flex; justify-content:space-between; margin-bottom:3px; }
+  .bar-bg { background:var(--bg3); border-radius:4px; height:20px; overflow:hidden; border:0.5px solid var(--border); }
+  .bar-fill { height:100%; border-radius:4px; transition:width .4s; display:flex; align-items:center; padding-left:8px; }
+  .bar-lbl { font-size:11px; font-weight:500; color:rgba(255,255,255,0.85); }
+
+  table.cmp { width:100%; border-collapse:collapse; font-size:13px; margin:12px 0; }
+  table.cmp th { text-align:left; font-weight:500; color:var(--muted); font-size:11px; letter-spacing:.05em; text-transform:uppercase; padding:6px 10px; border-bottom:1px solid var(--border); }
+  table.cmp td { padding:8px 10px; border-bottom:0.5px solid var(--border); color:var(--text); vertical-align:top; font-size:12px; }
+  table.cmp td:first-child { color:var(--muted); font-weight:500; white-space:nowrap; }
+  table.cmp tr:last-child td { border-bottom:none; }
+  table.cmp .hi { color:var(--accent2); font-weight:500; }
+</style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <nav class="nav">
+    <a class="nav-home" href="index.html">← LLM Notes</a>
+    <span class="nav-title">15 / GQA & MQA</span>
+  </nav>
+
+  <div class="page-header">
+    <div class="tag">Attention efficiency</div>
+    <h1>GQA & MQA</h1>
+    <p class="subtitle">Multi-Query · Grouped Query — reducing the KV cache without losing quality</p>
+  </div>
+
+  <h2>The problem — KV cache memory at inference</h2>
+  <p>In standard Multi-Head Attention with H heads, the KV cache grows with every generated token:</p>
+
+  <pre><code>KV cache = 2 × L × T × H × head_dim × bytes
+         = 2 × layers × seq_len × heads × head_dim × dtype
+
+# LLaMA-7B at T=4096, fp16:
+# 2 × 32 × 4096 × 32 × 128 × 2 = 2 GB (cache alone)
+# At T=32768: 16 GB — more than the model weights</code></pre>
+
+  <p>At inference, generating each new token requires reading the entire KV cache from GPU memory. This is a <em>memory bandwidth</em> bottleneck, not a compute one. Reducing the KV cache directly enables: longer context windows in the same GPU memory, higher batch sizes, and faster token generation.</p>
+
+  <h2>Widget 1 — head structure comparison</h2>
+  <p>Click each tab to see how MHA, MQA, and GQA organise their Q/K/V heads. In GQA, drag the group slider to see how G interpolates between MHA (G=H) and MQA (G=1).</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">MHA vs MQA vs GQA — head organisation</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;" id="htabs"></div>
+    <div id="hpanel"></div>
+  </div>
+
+  <h2>Multi-Query Attention (MQA)</h2>
+  <p>MQA (Shazeer, 2019) takes the most aggressive approach: all H query heads share a single K and a single V projection:</p>
+
+  <pre><code>Q_h = X @ Wq_h   # for h in 0..H  — H separate Q projections
+K   = X @ Wk     # ONE shared K projection
+V   = X @ Wv     # ONE shared V projection
+
+# Each head h uses its own Q but the shared K and V:
+scores_h = Q_h @ K.T / sqrt(head_dim)
+output_h = softmax(scores_h) @ V</code></pre>
+
+  <p>KV cache shrinks from 2×H to 2×1 — an H× reduction. For H=32 that's 32× smaller. The cost: all H heads are forced to search the same key-value database. They can still ask different questions (different Wq_h), but they're all searching the same "library." Head specialisation is limited, and quality drops — especially on longer sequences and larger models.</p>
+
+  <h2>Grouped Query Attention (GQA)</h2>
+  <p>GQA (Ainslie et al., 2023) interpolates between MHA and MQA by dividing the H query heads into G groups. All heads within a group share one K and one V:</p>
+
+  <pre><code>group_size = H / G    # Q heads per group
+
+# For group g (heads g*gs to (g+1)*gs - 1):
+K_g = X @ Wk_g        # one K projection per group
+V_g = X @ Wv_g        # one V projection per group
+
+# For each head h in group g:
+Q_h     = X @ Wq_h    # still independent per head
+scores_h = Q_h @ K_g.T / sqrt(head_dim)
+output_h = softmax(scores_h) @ V_g
+
+# KV cache scales with G, not H:
+KV cache = 2 × L × T × G × head_dim × bytes</code></pre>
+
+  <div class="card-accent">
+    <strong>The key finding from the GQA paper:</strong> G = H/8 recovers nearly all of MHA quality while achieving near-MQA cache efficiency. This makes GQA strictly better than MQA in almost all cases — slightly more cache cost for significantly better quality. G=8 is the most common choice regardless of H.
+  </div>
+
+  <h2>Widget 2 — KV cache calculator</h2>
+  <p>Drag the sliders or load a preset to see exact cache sizes and the saving from GQA vs MHA. Pay attention to what happens when you drag T to large values.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">KV cache size — MHA vs GQA vs MQA</div>
+
+    <div class="ctrl-grid">
+      <div class="ctrl-item">
+        <label>Model dimension D</label>
+        <input type="range" min="512" max="8192" step="512" value="4096" id="D" oninput="calc()" style="width:100%;">
+        <div class="cv" id="D-out">4,096</div>
+      </div>
+      <div class="ctrl-item">
+        <label>Q heads H</label>
+        <input type="range" min="8" max="96" step="8" value="32" id="H" oninput="calc()" style="width:100%;">
+        <div class="cv" id="H-out">32</div>
+      </div>
+      <div class="ctrl-item">
+        <label>GQA groups G</label>
+        <input type="range" min="1" max="32" step="1" value="8" id="G" oninput="calc()" style="width:100%;">
+        <div class="cv" id="G-out">8 groups</div>
+      </div>
+      <div class="ctrl-item">
+        <label>Layers L</label>
+        <input type="range" min="1" max="128" step="1" value="32" id="L" oninput="calc()" style="width:100%;">
+        <div class="cv" id="L-out">32</div>
+      </div>
+      <div class="ctrl-item">
+        <label>Context length T</label>
+        <input type="range" min="512" max="131072" step="512" value="8192" id="T" oninput="calc()" style="width:100%;">
+        <div class="cv" id="T-out">8,192</div>
+      </div>
+      <div class="ctrl-item">
+        <label>Dtype</label>
+        <select id="dtype" onchange="calc()" style="font-size:12px;padding:5px 8px;background:var(--bg2);border:0.5px solid var(--border);border-radius:5px;color:var(--text);width:100%;margin-top:4px;">
+          <option value="2" selected>float16 / bfloat16 (2 bytes)</option>
+          <option value="4">float32 (4 bytes)</option>
+          <option value="1">int8 (1 byte)</option>
+        </select>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;">
+      <button onclick="preset('llama7')"  style="font-size:12px;padding:4px 12px;">LLaMA-7B (MHA)</button>
+      <button onclick="preset('llama70')" style="font-size:12px;padding:4px 12px;">LLaMA-2-70B (GQA)</button>
+      <button onclick="preset('mistral')" style="font-size:12px;padding:4px 12px;">Mistral-7B (GQA)</button>
+      <button onclick="preset('gpt3')"    style="font-size:12px;padding:4px 12px;">GPT-3 (MHA)</button>
+    </div>
+
+    <div class="result-grid" id="result-grid"></div>
+    <div style="font-size:12px;font-weight:500;color:var(--muted);margin:12px 0 6px;">Cache size comparison</div>
+    <div id="bars"></div>
+    <div style="background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--muted);line-height:1.65;margin-top:4px;" id="cache-insight"></div>
+  </div>
+
+  <h2>Why G=8 is usually enough</h2>
+  <p>Within a group of H/G query heads sharing one KV, the heads can still ask very different questions — they just search the same key space. Think of multiple people searching the same library catalogue using different search terms. The catalogue (K) and books (V) are shared, but each person finds what they need through their own query. As long as the group isn't too large, the shared KV space is expressive enough to support diverse attention patterns.</p>
+  <p>When G=1 (MQA), all 32 or 64 heads share one catalogue — too limiting at scale. When G=H/8, groups of 4–8 heads share a catalogue — diverse enough that each group can support distinct patterns within it.</p>
+
+  <h2>Parameter count difference</h2>
+
+  <pre><code># For H=32, G=8, D=4096, head_dim=128:
+MHA  Wk + Wv: 2 × 4096 × (32×128) = 2 × 4096 × 4096  = 33.6M / layer
+MQA  Wk + Wv: 2 × 4096 × (1×128)  = 2 × 4096 × 128   =  1.0M / layer  (32× less)
+GQA  Wk + Wv: 2 × 4096 × (8×128)  = 2 × 4096 × 1024  =  8.4M / layer  (4× less)
+
+# Total model params also shrink slightly with GQA/MQA.
+# LLaMA models compensate by increasing FFN size.</code></pre>
+
+  <h2>Converting MHA → GQA</h2>
+  <p>The GQA paper showed you can convert a pretrained MHA model to GQA with <em>uptrain</em> — fine-tuning on a small fraction of the original training data. The conversion groups existing MHA heads, mean-pools the K and V weight matrices within each group, then fine-tunes to recover quality. This was used to create GQA versions of originally-MHA models without full retraining.</p>
+
+  <h2>Model reference</h2>
+
+  <table class="cmp">
+    <thead><tr><th>Model</th><th>H (Q heads)</th><th>G (KV groups)</th><th>Type</th><th>head_dim</th></tr></thead>
+    <tbody>
+      <tr><td>GPT-2 Small</td><td>12</td><td>12</td><td>MHA</td><td>64</td></tr>
+      <tr><td>GPT-3 175B</td><td>96</td><td>96</td><td>MHA</td><td>128</td></tr>
+      <tr><td>LLaMA-1 7B</td><td>32</td><td>32</td><td>MHA</td><td>128</td></tr>
+      <tr><td>LLaMA-2 7B</td><td>32</td><td>32</td><td>MHA</td><td>128</td></tr>
+      <tr><td>LLaMA-2 70B</td><td>64</td><td class="hi">8</td><td class="hi">GQA</td><td>128</td></tr>
+      <tr><td>LLaMA-3 8B</td><td>32</td><td class="hi">8</td><td class="hi">GQA</td><td>128</td></tr>
+      <tr><td>LLaMA-3 70B</td><td>64</td><td class="hi">8</td><td class="hi">GQA</td><td>128</td></tr>
+      <tr><td>Mistral 7B</td><td>32</td><td class="hi">8</td><td class="hi">GQA</td><td>128</td></tr>
+      <tr><td>Gemma 7B</td><td>16</td><td>1</td><td>MQA</td><td>256</td></tr>
+      <tr><td>Falcon 7B</td><td>71</td><td>1</td><td>MQA</td><td>64</td></tr>
+      <tr><td>Falcon 40B</td><td>128</td><td class="hi">8</td><td class="hi">GQA</td><td>64</td></tr>
+    </tbody>
+  </table>
+
+  <dl class="key-concept">
+    <dt>MHA</dt><dd>Multi-Head Attention. H Q heads, H K heads, H V heads. Maximum quality, maximum cache. The original design.</dd>
+    <dt>MQA</dt><dd>Multi-Query Attention. H Q heads, 1 shared K, 1 shared V. H× cache reduction, some quality loss.</dd>
+    <dt>GQA</dt><dd>Grouped Query Attention. H Q heads, G shared KV groups (1 ≤ G ≤ H). H/G× cache reduction, near-MHA quality at G=H/8.</dd>
+    <dt>KV cache bandwidth</dt><dd>The main inference bottleneck at long context. Every generated token requires reading the full cache from GPU memory. Smaller cache = faster generation.</dd>
+    <dt>G = H/8</dt><dd>The empirically validated sweet spot. Used in LLaMA-2-70B, LLaMA-3, Mistral, Falcon-40B. Nearly recovers MHA quality.</dd>
+    <dt>Uptrain</dt><dd>Converting a pretrained MHA model to GQA by mean-pooling K/V weights and fine-tuning briefly. Avoids full retraining.</dd>
+  </dl>
+
+  <div class="card-green">
+    <strong>The practical summary:</strong> GQA with G=8 is now the default for any model that cares about serving efficiency. It costs almost nothing in quality, reduces the KV cache by H/8× (4–8× for typical H), and enables much longer contexts or much higher batch sizes in the same GPU memory. If you're designing a new LLM in 2024+, there's almost no reason to use full MHA.
+  </div>
+
+</div>
+
+<script>
+const QC='#185FA5', KC='#0F6E56', VC='#BA7517';
+const GRP_COLORS=['#185FA5','#7F77DD','#0F6E56','#BA7517','#993C1D','#D85A30','#1D9E75','#534AB7'];
+
+function hbox(label,color,w,h){
+  w=w||44;h=h||32;
+  return`<div class="hbox" style="width:${w}px;height:${h}px;border-color:${color}66;color:${color};background:${color}14;">${label}</div>`;
+}
+
+function renderMHA(){
+  const H=8;
+  document.getElementById('hpanel').innerHTML=`
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
+      <div style="flex:1;min-width:280px;">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">Each of the ${H} Q heads has its own dedicated K and V. Every Q searches its own private key-value space.</div>
+        <div style="margin-bottom:4px;"><div style="font-size:10px;font-family:var(--mono);color:${QC};font-weight:500;margin-bottom:4px;">Q heads (${H})</div><div style="display:flex;gap:4px;flex-wrap:wrap;">${Array.from({length:H},(_,i)=>hbox(`Q${i}`,QC)).join('')}</div></div>
+        <div style="display:flex;gap:4px;margin:2px 0;">${Array.from({length:H},()=>`<div style="flex:1;height:14px;border-left:1.5px solid ${QC}33;"></div>`).join('')}</div>
+        <div style="margin-bottom:4px;"><div style="font-size:10px;font-family:var(--mono);color:${KC};font-weight:500;margin-bottom:4px;">K heads (${H})</div><div style="display:flex;gap:4px;flex-wrap:wrap;">${Array.from({length:H},(_,i)=>hbox(`K${i}`,KC)).join('')}</div></div>
+        <div style="margin-bottom:4px;"><div style="font-size:10px;font-family:var(--mono);color:${VC};font-weight:500;margin-bottom:4px;">V heads (${H})</div><div style="display:flex;gap:4px;flex-wrap:wrap;">${Array.from({length:H},(_,i)=>hbox(`V${i}`,VC)).join('')}</div></div>
+        <div class="chip-row" style="margin-top:10px;">
+          <div class="chip">Q: <b>${H}</b></div><div class="chip">K: <b>${H}</b></div><div class="chip">V: <b>${H}</b></div><div class="chip">KV ratio: <b>1:1</b></div>
+        </div>
+      </div>
+      <div style="flex:1;min-width:200px;"><div class="ins"><strong>MHA</strong> — every Q head has its own K and V. H heads → H K projections + H V projections. Maximum expressiveness, maximum KV cache. Total Wk + Wv parameters: 2 × D × (H × head_dim). KV cache per layer: 2 × T × H × head_dim × bytes.</div></div>
+    </div>`;
+}
+
+function renderMQA(){
+  const H=8;
+  document.getElementById('hpanel').innerHTML=`
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
+      <div style="flex:1;min-width:280px;">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">All ${H} Q heads share exactly one K and one V. Every Q searches the same key-value database.</div>
+        <div style="margin-bottom:4px;"><div style="font-size:10px;font-family:var(--mono);color:${QC};font-weight:500;margin-bottom:4px;">Q heads (${H})</div><div style="display:flex;gap:4px;flex-wrap:wrap;">${Array.from({length:H},(_,i)=>hbox(`Q${i}`,QC)).join('')}</div></div>
+        <div style="height:24px;position:relative;margin:2px 0;">
+          <div style="position:absolute;left:22px;right:22px;top:0;height:1.5px;background:${QC}44;"></div>
+          <div style="position:absolute;left:50%;top:0;width:1.5px;height:100%;background:${QC}44;transform:translateX(-50%);"></div>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:center;margin-bottom:6px;">
+          ${hbox('K',KC,56,36)}${hbox('V',VC,56,36)}
+        </div>
+        <div style="font-size:10px;font-family:var(--mono);color:var(--muted);text-align:center;margin-bottom:8px;">shared by ALL Q heads</div>
+        <div class="chip-row">
+          <div class="chip">Q: <b>${H}</b></div><div class="chip">K: <b>1</b></div><div class="chip">V: <b>1</b></div><div class="chip">KV ratio: <b>${H}:1</b></div>
+        </div>
+      </div>
+      <div style="flex:1;min-width:200px;"><div class="ins"><strong>MQA</strong> — all Q heads share one K and one V. KV cache is ${H}× smaller than MHA. Total Wk + Wv: 2 × D × head_dim (tiny). Quality drops because all heads search the same key space — head specialisation is limited. Some models find MQA too aggressive for large scale.</div></div>
+    </div>`;
+}
+
+function renderGQA(){
+  document.getElementById('hpanel').innerHTML=`
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
+      <div style="flex:1;min-width:280px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">
+          <label style="font-size:12px;color:var(--muted);">KV groups G:</label>
+          <input type="range" min="1" max="8" step="1" value="2" id="gslider" oninput="updateGQA()" style="width:120px;">
+          <span style="font-family:var(--mono);font-size:13px;font-weight:500;color:var(--text);min-width:20px;" id="g-out">2</span>
+        </div>
+        <div id="gqa-groups"></div>
+        <div class="chip-row" id="gqa-chips"></div>
+      </div>
+      <div style="flex:1;min-width:200px;"><div class="ins" id="gqa-ins"></div></div>
+    </div>`;
+  updateGQA();
+}
+window.updateGQA=function(){
+  const H=8,G=parseInt(document.getElementById('gslider').value);
+  document.getElementById('g-out').textContent=G;
+  const perGroup=H/G;
+  let groups='';
+  for(let g=0;g<G;g++){
+    const gc=GRP_COLORS[g%GRP_COLORS.length];
+    const qs=Array.from({length:perGroup},(_,i)=>hbox(`Q${g*perGroup+i}`,gc,Math.max(28,40-H*0.5)|0,28));
+    groups+=`<div style="background:${gc}10;border:0.5px solid ${gc}33;border-radius:8px;padding:6px 10px;margin-bottom:5px;">
+      <div style="font-size:10px;font-family:var(--mono);color:${gc};margin-bottom:4px;font-weight:500;">Group ${g}</div>
+      <div style="display:flex;gap:3px;align-items:center;flex-wrap:wrap;">
+        ${qs.join('')}
+        <div style="font-size:13px;color:${gc}88;padding:0 3px;">→</div>
+        ${hbox(`K${g}`,gc,34,26)} ${hbox(`V${g}`,gc,34,26)}
+      </div>
+    </div>`;
+  }
+  document.getElementById('gqa-groups').innerHTML=groups;
+  document.getElementById('gqa-chips').innerHTML=
+    `<div class="chip">Q: <b>${H}</b></div><div class="chip">KV groups: <b>${G}</b></div>`+
+    `<div class="chip">Q/group: <b>${perGroup.toFixed(1)}</b></div><div class="chip">KV ratio: <b>${(H/G).toFixed(1)}:1</b></div>`;
+  document.getElementById('gqa-ins').innerHTML=G===1
+    ?`<strong>G=1 → MQA.</strong> All ${H} Q heads share one K and V. Maximum cache savings (${H}× vs MHA). Limited head specialisation.`
+    :G===H
+    ?`<strong>G=H → MHA.</strong> Each Q has its own K and V. No sharing, maximum quality, maximum cache size.`
+    :`<strong>GQA (G=${G}).</strong> ${perGroup} Q heads per group, each group shares one K and V. KV cache is <strong>${(H/G).toFixed(1)}× smaller</strong> than MHA. At G=H/8 this recovers nearly all MHA quality — the empirically validated sweet spot used in LLaMA-2-70B and Mistral.`;
+};
+
+const HTABS=[{label:'MHA',fn:renderMHA},{label:'MQA',fn:renderMQA},{label:'GQA',fn:renderGQA}];
+let hcur=0;
+const htabEl=document.getElementById('htabs');
+HTABS.forEach((t,i)=>{
+  const el=document.createElement('div');el.className='tab'+(i===hcur?' on':'');el.textContent=t.label;
+  el.onclick=()=>{hcur=i;document.querySelectorAll('#htabs .tab').forEach((x,j)=>x.classList.toggle('on',j===i));t.fn();};
+  htabEl.appendChild(el);
+});
+HTABS[0].fn();
+
+function fmtB(n){
+  if(n>=1e12)return(n/1e12).toFixed(2)+' TB';
+  if(n>=1e9) return(n/1e9).toFixed(2)+' GB';
+  if(n>=1e6) return(n/1e6).toFixed(2)+' MB';
+  if(n>=1e3) return(n/1e3).toFixed(1)+' KB';
+  return Math.round(n)+' B';
+}
+
+function calc(){
+  const D=parseInt(document.getElementById('D').value);
+  const H=parseInt(document.getElementById('H').value);
+  const G=Math.min(parseInt(document.getElementById('G').value),H);
+  const L=parseInt(document.getElementById('L').value);
+  const T=parseInt(document.getElementById('T').value);
+  const dtype=parseInt(document.getElementById('dtype').value);
+  const hd=Math.floor(D/H);
+
+  document.getElementById('D-out').textContent=D.toLocaleString();
+  document.getElementById('H-out').textContent=H;
+  document.getElementById('G-out').textContent=G+(G===H?' (= MHA)':G===1?' (= MQA)':' groups');
+  document.getElementById('L-out').textContent=L;
+  document.getElementById('T-out').textContent=T.toLocaleString();
+
+  const kvMHA=2*L*T*H*hd*dtype;
+  const kvMQA=2*L*T*1*hd*dtype;
+  const kvGQA=2*L*T*G*hd*dtype;
+  const ratio=(kvMHA/kvGQA).toFixed(1);
+  const pct=((1-kvGQA/kvMHA)*100).toFixed(1);
+
+  document.getElementById('result-grid').innerHTML=
+    `<div class="rc"><div class="rl">MHA cache</div><div class="rv">${fmtB(kvMHA)}</div><div class="rs">G = H = ${H}</div></div>`+
+    `<div class="rc"><div class="rl">GQA cache</div><div class="rv">${fmtB(kvGQA)}</div><div class="rs">G = ${G}</div></div>`+
+    `<div class="rc hi"><div class="rl">Saving vs MHA</div><div class="rv">${ratio}×</div><div class="rs">${pct}% smaller</div></div>`+
+    `<div class="rc"><div class="rl">MQA cache</div><div class="rv">${fmtB(kvMQA)}</div><div class="rs">G = 1</div></div>`+
+    `<div class="rc"><div class="rl">head_dim</div><div class="rv">${hd}</div><div class="rs">D / H</div></div>`+
+    `<div class="rc"><div class="rl">Q per group</div><div class="rv">${(H/G).toFixed(1)}</div><div class="rs">H / G</div></div>`;
+
+  document.getElementById('bars').innerHTML=
+    [{label:'MHA (G=H)',val:kvMHA,color:'#A32D2D'},
+     {label:`GQA (G=${G})`,val:kvGQA,color:'#0F6E56'},
+     {label:'MQA (G=1)',val:kvMQA,color:'#185FA5'}]
+    .map(({label,val,color})=>{
+      const pct2=Math.max(1,Math.round(val/kvMHA*100));
+      return`<div class="bar-section">
+        <div class="bar-label"><span>${label}</span><span style="font-family:var(--mono);">${fmtB(val)}</span></div>
+        <div class="bar-bg"><div class="bar-fill" style="width:${pct2}%;background:${color};"><span class="bar-lbl">${pct2}%</span></div></div>
+      </div>`;
+    }).join('');
+
+  document.getElementById('cache-insight').innerHTML=
+    `At T=${T.toLocaleString()} with ${L} layers: GQA (G=${G}) = <strong>${fmtB(kvGQA)}</strong> — `+
+    `<strong>${ratio}× smaller</strong> than MHA (${fmtB(kvMHA)}). `+
+    (G===H?'G=H means full MHA — no savings.'
+    :G===1?'G=1 means MQA — maximum savings, some quality loss.'
+    :`You could fit <strong>${Math.floor(kvMHA/kvGQA)}× longer contexts</strong> in the same memory budget compared to MHA.`);
+}
+
+const PRESETS={
+  llama7: {D:4096,H:32,G:32,L:32,T:4096,dtype:2},
+  llama70:{D:8192,H:64,G:8, L:80,T:4096,dtype:2},
+  mistral:{D:4096,H:32,G:8, L:32,T:32768,dtype:2},
+  gpt3:   {D:12288,H:96,G:96,L:96,T:2048,dtype:2},
+};
+function preset(n){
+  const p=PRESETS[n];
+  ['D','H','G','L','T'].forEach(k=>document.getElementById(k).value=p[k]);
+  document.getElementById('dtype').value=p.dtype;
+  calc();
+}
+window.preset=preset;
+calc();
+</script>
+</body>
+</html>
