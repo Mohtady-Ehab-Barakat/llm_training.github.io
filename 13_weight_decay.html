@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>13 — Weight Decay · LLM Notes</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .tab { padding:5px 14px; border-radius:6px; font-size:12px; font-weight:500; cursor:pointer; border:1px solid var(--border); background:var(--bg2); color:var(--muted); transition:all .14s; white-space:nowrap; }
+  .tab:hover { background:var(--bg3); color:var(--text); }
+  .tab.on { background:#0C2244; border-color:#185FA5; color:#85B7EB; }
+
+  .stat-chip { font-size:11px; font-family:var(--mono); background:var(--bg3); border:0.5px solid var(--border); border-radius:4px; padding:3px 9px; color:var(--muted); }
+  .stat-chip b { color:var(--text); font-weight:500; }
+  .chip-row { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0; }
+
+  .ctrl-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+  .ctrl-row label { font-size:12px; color:var(--muted); white-space:nowrap; }
+  .ctrl-row output { font-family:var(--mono); font-size:12px; font-weight:500; color:var(--text); min-width:36px; }
+
+  .param-row { display:flex; align-items:flex-start; gap:10px; padding:8px 0; border-bottom:0.5px solid var(--border); }
+  .param-badge { flex-shrink:0; width:20px; height:20px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:500; margin-top:1px; }
+  .param-name { font-size:12px; font-weight:500; color:var(--text); font-family:var(--mono); }
+  .param-reason { font-size:11px; color:var(--muted); margin-top:2px; line-height:1.55; }
+  .param-tag { font-size:11px; font-weight:500; white-space:nowrap; }
+</style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <nav class="nav">
+    <a class="nav-home" href="index.html">← LLM Notes</a>
+    <span class="nav-title">13 / Weight decay</span>
+  </nav>
+
+  <div class="page-header">
+    <div class="tag">Training</div>
+    <h1>Weight decay</h1>
+    <p class="subtitle">What it is · why it works · weight decay vs L2 regularisation · the Adam/AdamW difference · which params to decay</p>
+  </div>
+
+  <h2>What weight decay is</h2>
+  <p>Every step of gradient descent updates a weight like this:</p>
+
+  <pre><code>w ← w − lr × gradient                    # plain SGD</code></pre>
+
+  <p>Weight decay adds one extra operation — multiply the weight by a number slightly less than 1 <em>before</em> applying the gradient:</p>
+
+  <pre><code>w ← w × (1 − lr·λ) − lr × gradient
+      ↑ this is weight decay — w shrinks every step</code></pre>
+
+  <p>The factor <code>(1 − lr·λ)</code> is always less than 1. So every single training step, every decayed weight shrinks by a tiny fraction. If the task gradient keeps pushing a weight up, the weight finds an equilibrium. If the gradient stops pushing, the weight shrinks toward zero. Weights that earn their place stay. Weights that don't gradually disappear.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">Three views of weight decay — click each tab</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;" id="tabs"></div>
+    <div id="panel"></div>
+  </div>
+
+  <h2>Why weight decay prevents overfitting</h2>
+  <p>When a model overfits it typically develops very large weights that carve out sharp, complex decision boundaries tuned to the noise in training data. Large weights produce large activations, overconfident predictions that are right on training data but wrong on new data.</p>
+  <p>Weight decay prevents this by taxing large weights. A weight of 10 decays 10× faster in absolute terms than a weight of 1. The model always pays a cost for having large weights, so it only keeps them large when the task data strongly demands it. The result is smoother, more generalisable solutions.</p>
+
+  <h2>Weight decay vs L2 regularisation — not the same with Adam</h2>
+  <p>Both methods try to keep weights small but do it differently.</p>
+  <p>L2 regularisation adds a penalty term to the loss:</p>
+
+  <pre><code>Loss_total = Loss_task + λ · Σ w²
+# gradient of penalty = 2λw → added to task gradient before update</code></pre>
+
+  <p>Weight decay multiplies the weight directly, after the optimiser step:</p>
+
+  <pre><code>w ← w × (1 − lr·λ) − lr × optimiser_update(gradient)</code></pre>
+
+  <p><strong>With SGD they are mathematically identical.</strong> Substituting <code>2λw</code> into the SGD update gives exactly <code>w × (1 − 2·lr·λ)</code> — same formula. This is why the terms were used interchangeably for years.</p>
+
+  <p><strong>With Adam they are completely different.</strong> Adam divides every gradient by an adaptive denominator <code>√v̂</code> based on gradient history. When you add <code>λw</code> to the gradient as L2, it also gets divided by <code>√v̂</code>:</p>
+
+  <pre><code># Adam + L2:
+w ← w − lr × (task_grad + λw) / √v̂
+                         ↑ penalty is scaled down by √v̂
+
+# The effective regularisation per weight depends on its gradient
+# history — inconsistent, and empirically worse.</code></pre>
+
+  <p>AdamW fixes this by keeping weight decay completely separate from the gradient:</p>
+
+  <pre><code># AdamW:
+w ← w × (1 − lr·λ) − lr × task_grad / √v̂
+      ↑ decay applied directly to w, not via the gradient pipeline
+
+# Every weight gets the same proportional decay regardless of
+# its gradient history. Cleaner and consistently better.</code></pre>
+
+  <div class="card-accent">
+    <strong>This is exactly why AdamW exists</strong> (Loshchilov & Hutter, 2017). With SGD the difference doesn't matter — use either. With Adam always use AdamW. Every modern LLM (GPT-3, LLaMA, Mistral, Gemma) trains with AdamW, not Adam.
+  </div>
+
+  <h2>Which parameters get decayed</h2>
+  <p>Not everything should be decayed. The standard rule: decay weight matrices, leave normalisation parameters and biases alone.</p>
+
+  <div id="param-list"></div>
+
+  <pre><code># PyTorch implementation — two parameter groups:
+decay_params    = [p for n,p in model.named_parameters()
+                   if p.dim() >= 2]          # matrices
+no_decay_params = [p for n,p in model.named_parameters()
+                   if p.dim() < 2]           # norms, biases
+
+optimizer = AdamW([
+    {'params': decay_params,    'weight_decay': 0.1},
+    {'params': no_decay_params, 'weight_decay': 0.0},
+], lr=3e-4, betas=(0.9, 0.95))</code></pre>
+
+  <h2>The equilibrium — where weights settle</h2>
+  <p>At convergence each weight finds an equilibrium between two opposing forces: the task gradient pushing it toward values that reduce the loss, and weight decay pulling it toward zero:</p>
+
+  <pre><code># At equilibrium (decay force ≈ task gradient):
+lr·λ·w ≈ task_gradient
+→ w ≈ task_gradient / (lr·λ)
+
+# A weight that contributes a lot to reducing the loss has a
+# large task gradient → settles at a large value.
+# A weight that contributes little → settles near zero.</code></pre>
+
+  <p>Weight decay is a continuous, differentiable way of saying: "prove you're useful or disappear."</p>
+
+  <h2>Typical values</h2>
+
+  <dl class="key-concept">
+    <dt>λ = 0.1</dt><dd>Near-universal standard for large transformers. GPT-3, LLaMA 1/2/3, Mistral, Gemma all use 0.1.</dd>
+    <dt>λ = 0.01</dt><dd>Smaller models, fine-tuning runs, or when the dataset is small and you want gentler regularisation.</dd>
+    <dt>λ = 0.0</dt><dd>No weight decay. Occasionally used for very large datasets where overfitting isn't a concern.</dd>
+    <dt>λ &gt; 0.1</dt><dd>Rarely used — too aggressive. Forces weights too small, hurting model capacity.</dd>
+    <dt>Decay factor/step</dt><dd>(1 − lr·λ) per step. With lr=0.001 and λ=0.1: factor = 0.9999. Weight halves every ~6,931 steps.</dd>
+    <dt>dim &gt;= 2 rule</dt><dd>PyTorch convention for separating matrices (decay) from 1D params like norms and biases (no decay). Clean and reliable.</dd>
+  </dl>
+
+  <div class="card-green">
+    <strong>Summary:</strong> weight decay = multiply every weight matrix by (1 − lr·λ) every step. With SGD it equals L2 regularisation. With Adam it doesn't — use AdamW which applies decay directly to weights, bypassing the adaptive scaling. Standard λ = 0.1. Do not decay LayerNorm parameters or biases.
+  </div>
+
+</div>
+
+<script>
+const dark = window.matchMedia('(prefers-color-scheme:dark)').matches;
+
+function mkCanvas(id, w, h) {
+  const cv = document.getElementById(id);
+  cv.width = w; cv.height = h;
+  cv.style.cssText = `width:100%;height:${h}px;border-radius:8px;display:block;background:${dark?'#13161b':'#f5f5f3'};border:0.5px solid ${dark?'#2a2f3a':'#d3d1c7'};margin-bottom:10px;`;
+  return cv;
+}
+
+function lineChart(canvas, series, opts) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height, PAD = 38;
+  ctx.clearRect(0,0,W,H);
+  const allY = series.flatMap(s=>s.data);
+  const minY = opts.minY !== undefined ? opts.minY : Math.min(...allY);
+  const maxY = opts.maxY !== undefined ? opts.maxY : Math.max(...allY);
+  const n = series[0].data.length;
+  const toC = (i,v) => [PAD + (i/(n-1))*(W-2*PAD), H-PAD - (v-minY)/(maxY-minY+1e-9)*(H-2*PAD)];
+
+  const gc = dark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)';
+  ctx.strokeStyle=gc; ctx.lineWidth=0.5;
+  [0.25,0.5,0.75].forEach(t=>{
+    const y = PAD+(1-t)*(H-2*PAD);
+    ctx.beginPath();ctx.moveTo(PAD,y);ctx.lineTo(W-PAD,y);ctx.stroke();
+    const val = minY+t*(maxY-minY);
+    ctx.fillStyle=dark?'rgba(255,255,255,0.3)':'rgba(0,0,0,0.3)';
+    ctx.font='10px monospace';ctx.textAlign='right';
+    ctx.fillText(val.toFixed(2),PAD-3,y+4);
+  });
+
+  if(opts.zeroLine){
+    const[,zy]=toC(0,0);
+    ctx.strokeStyle=dark?'rgba(255,255,255,0.18)':'rgba(0,0,0,0.18)';ctx.lineWidth=0.8;
+    ctx.beginPath();ctx.moveTo(PAD,zy);ctx.lineTo(W-PAD,zy);ctx.stroke();
+  }
+
+  series.forEach(s=>{
+    ctx.strokeStyle=s.color;ctx.lineWidth=s.width||2;ctx.setLineDash(s.dash||[]);
+    ctx.beginPath();
+    s.data.forEach((v,i)=>{ const[x,y]=toC(i,v); i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); });
+    ctx.stroke();ctx.setLineDash([]);
+  });
+
+  if(opts.legend){
+    let ly=16;
+    opts.legend.forEach(({label,color,dash})=>{
+      ctx.strokeStyle=color;ctx.lineWidth=2;ctx.setLineDash(dash||[]);
+      ctx.beginPath();ctx.moveTo(PAD,ly);ctx.lineTo(PAD+20,ly);ctx.stroke();ctx.setLineDash([]);
+      ctx.fillStyle=dark?'rgba(255,255,255,0.5)':'rgba(0,0,0,0.5)';
+      ctx.font='10px monospace';ctx.textAlign='left';ctx.fillText(label,PAD+24,ly+4);
+      ly+=16;
+    });
+  }
+
+  if(opts.xlabel){
+    ctx.fillStyle=dark?'rgba(255,255,255,0.3)':'rgba(0,0,0,0.3)';
+    ctx.font='10px monospace';ctx.textAlign='center';
+    ctx.fillText(opts.xlabel, W/2, H-4);
+  }
+}
+
+const TABS = [
+  { label:'Weight trajectory', id:'t0' },
+  { label:'Weight decay vs L2 with Adam', id:'t1' },
+  { label:'Which params get decayed?', id:'t2' },
+];
+
+function renderTab0() {
+  document.getElementById('panel').innerHTML = `
+    <div class="ctrl-row">
+      <label>Initial weight w₀:</label>
+      <input type="range" min="-3" max="3" step="0.1" value="2" id="w0" oninput="rp0()" style="width:100px;">
+      <output id="w0-out">2.0</o>
+      <label style="margin-left:8px;">Learning rate lr:</label>
+      <input type="range" min="0.001" max="0.1" step="0.001" value="0.01" id="lr0" oninput="rp0()" style="width:100px;">
+      <output id="lr0-out">0.010</o>
+      <label style="margin-left:8px;">Weight decay λ:</label>
+      <input type="range" min="0" max="0.3" step="0.01" value="0.1" id="wd0" oninput="rp0()" style="width:100px;">
+      <output id="wd0-out">0.10</o>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">Pure decay effect — no task gradient, just the shrinkage term</div>
+    <canvas id="wc"></canvas>
+    <div class="chip-row" id="wstats"></div>
+    <div style="background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--muted);line-height:1.65;" id="w-ins"></div>`;
+  rp0();
+}
+
+function rp0() {
+  const w0 = parseFloat(document.getElementById('w0').value);
+  const lr = parseFloat(document.getElementById('lr0').value);
+  const wd = parseFloat(document.getElementById('wd0').value);
+  document.getElementById('w0-out').textContent = w0.toFixed(1);
+  document.getElementById('lr0-out').textContent = lr.toFixed(3);
+  document.getElementById('wd0-out').textContent = wd.toFixed(2);
+  const N = 80;
+  const noDecay = Array.from({length:N}, (_,i) => w0);
+  const withDecay = Array.from({length:N}, (_,i) => w0 * Math.pow(1-lr*wd, i));
+  const cv = mkCanvas('wc', 560, 200);
+  lineChart(cv, [
+    {data:noDecay,   color:dark?'rgba(163,45,45,0.45)':'rgba(163,45,45,0.4)', width:1.5, dash:[4,3]},
+    {data:withDecay, color:'#0F6E56', width:2.5},
+  ], {
+    minY:Math.min(0, w0*1.1, withDecay[N-1]*1.1),
+    maxY:Math.max(0, w0*1.1),
+    zeroLine:true, xlabel:'training steps →',
+    legend:[{label:'no decay (dashed)',color:dark?'rgba(163,45,45,0.6)':'rgba(163,45,45,0.5)',dash:[4,3]},{label:'with decay',color:'#0F6E56'}],
+  });
+  const df = (1-lr*wd);
+  const hl = df === 1 ? Infinity : Math.log(0.5)/Math.log(df);
+  document.getElementById('wstats').innerHTML =
+    `<div class="stat-chip">decay factor/step: <b>${df.toFixed(4)}</b></div>` +
+    `<div class="stat-chip">half-life: <b>${isFinite(hl)?hl.toFixed(1)+' steps':'∞'}</b></div>` +
+    `<div class="stat-chip">w after ${N} steps: <b>${withDecay[N-1].toFixed(4)}</b></div>`;
+  document.getElementById('w-ins').innerHTML =
+    `<strong>Weight decay</strong> multiplies the weight by <strong>(1 − lr·λ) = ${df.toFixed(4)}</strong> every step. With no task gradient (dashed = no decay) the weight stays fixed. With decay (green) it shrinks exponentially toward zero. When the task gradient simultaneously pushes the weight up, an equilibrium forms — the weight stabilises at a value proportional to how strongly the data needs it.`;
+}
+window.rp0 = rp0;
+
+function renderTab1() {
+  document.getElementById('panel').innerHTML = `
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">With SGD the two methods are identical — lines overlap. Switch to Adam and watch them split. The split shows the distortion that AdamW fixes.</div>
+    <div class="ctrl-row">
+      <label>Optimizer:</label>
+      <select id="opt-sel" onchange="rp1()" style="font-size:12px;padding:4px 8px;background:var(--bg2);border:0.5px solid var(--border);border-radius:5px;color:var(--text);">
+        <option value="sgd">SGD</option>
+        <option value="adam" selected>Adam</option>
+      </select>
+      <label style="margin-left:8px;">λ:</label>
+      <input type="range" min="0.01" max="0.3" step="0.01" value="0.1" id="lam1" oninput="rp1()" style="width:100px;">
+      <output id="lam1-out">0.10</o>
+    </div>
+    <canvas id="dc"></canvas>
+    <div style="background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--muted);line-height:1.65;" id="d-ins"></div>`;
+  rp1();
+}
+
+function rp1() {
+  const opt = document.getElementById('opt-sel').value;
+  const lam = parseFloat(document.getElementById('lam1').value);
+  document.getElementById('lam1-out').textContent = lam.toFixed(2);
+  const N=80, w0=2.0, lr=0.01, b1=0.9, b2=0.999, eps=1e-8;
+
+  function simAdamW(lambda){
+    let w=w0,m=0,v=0;
+    return Array.from({length:N},(_,t)=>{
+      const g=w*0.5+Math.sin(t*0.3)*0.1;
+      m=b1*m+(1-b1)*g; v=b2*v+(1-b2)*g*g;
+      const mh=m/(1-b1**(t+1)), vh=v/(1-b2**(t+1));
+      w=w*(1-lr*lambda)-lr*mh/(Math.sqrt(vh)+eps);
+      return w;
+    });
+  }
+  function simAdamL2(lambda){
+    let w=w0,m=0,v=0;
+    return Array.from({length:N},(_,t)=>{
+      const g=w*0.5+Math.sin(t*0.3)*0.1+lambda*w;
+      m=b1*m+(1-b1)*g; v=b2*v+(1-b2)*g*g;
+      const mh=m/(1-b1**(t+1)), vh=v/(1-b2**(t+1));
+      w=w-lr*mh/(Math.sqrt(vh)+eps);
+      return w;
+    });
+  }
+  function simSGD_WD(lambda){
+    let w=w0;
+    return Array.from({length:N},(_,t)=>{
+      const g=w*0.5+Math.sin(t*0.3)*0.1;
+      w=w*(1-lr*lambda)-lr*g; return w;
+    });
+  }
+  function simSGD_L2(lambda){
+    let w=w0;
+    return Array.from({length:N},(_,t)=>{
+      const g=w*0.5+Math.sin(t*0.3)*0.1+lambda*w;
+      w=w-lr*g; return w;
+    });
+  }
+
+  const wd_data = opt==='sgd' ? simSGD_WD(lam) : simAdamW(lam);
+  const l2_data = opt==='sgd' ? simSGD_L2(lam) : simAdamL2(lam);
+  const all = [...wd_data,...l2_data];
+  const cv = mkCanvas('dc', 560, 200);
+  lineChart(cv, [
+    {data:wd_data, color:'#0F6E56', width:2.5},
+    {data:l2_data, color:'#A32D2D', width:2.5},
+  ], {
+    minY:Math.min(...all), maxY:Math.max(...all), zeroLine:true, xlabel:'training steps →',
+    legend:[{label:'AdamW / SGD+WD (decoupled decay)',color:'#0F6E56'},{label:'Adam+L2 / SGD+L2 (coupled)',color:'#A32D2D'}],
+  });
+
+  const diff = Math.abs(wd_data[N-1]-l2_data[N-1]);
+  document.getElementById('d-ins').innerHTML = opt==='sgd'
+    ? `<strong>SGD: identical.</strong> Weight decay and L2 regularisation are mathematically the same with SGD. Adding λw to the gradient and multiplying w by (1−lr·λ) produce the same result — the lines overlap exactly. This is why the terms were used interchangeably in older literature.`
+    : `<strong>Adam: different.</strong> L2 adds λw to the gradient, which then gets divided by √v̂ — the effective penalty depends on each weight's gradient history. AdamW applies decay directly, bypassing √v̂. Final weights differ by <strong>${diff.toFixed(3)}</strong> — a real gap that affects model quality at scale.`;
+}
+window.rp1 = rp1;
+
+const PARAMS = [
+  {name:'Weight matrices (Wq, Wk, Wv, Wo, W1, W2)', decay:true,  reason:'The main parameters. Decaying them prevents extreme values and overfitting.'},
+  {name:'Embedding table',                            decay:true,  reason:'Treated like a weight matrix. Decay keeps embeddings from growing unbounded.'},
+  {name:'LM head',                                    decay:true,  reason:'Weight matrix — same as embedding when weight-tied.'},
+  {name:'LayerNorm γ (scale)',                        decay:false, reason:'Controls normalisation scale. Decaying fights the network\'s ability to set its own activation scale.'},
+  {name:'LayerNorm β (shift)',                        decay:false, reason:'Controls normalisation offset. Same reason — let it learn freely.'},
+  {name:'Biases',                                     decay:false, reason:'Small additive offsets. Convention: leave undecayed. Effect of decaying is negligible.'},
+  {name:'Positional embeddings (learned)',            decay:true,  reason:'Learned vectors are weight matrices and are typically decayed.'},
+  {name:'RoPE frequencies',                           decay:false, reason:'Fixed / not learned — no gradient, nothing to decay.'},
+];
+
+function renderTab2() {
+  const rows = PARAMS.map(p=>
+    `<div class="param-row">
+      <div class="param-badge" style="background:${p.decay?'rgba(15,110,86,0.15)':'rgba(163,45,45,0.12)'};color:${p.decay?'#1D9E75':'#A32D2D'};">${p.decay?'✓':'✗'}</div>
+      <div style="flex:1;">
+        <div class="param-name">${p.name}</div>
+        <div class="param-reason">${p.reason}</div>
+      </div>
+      <div class="param-tag" style="color:${p.decay?'#1D9E75':'#A32D2D'};">${p.decay?'decayed':'not decayed'}</div>
+    </div>`
+  ).join('');
+  document.getElementById('panel').innerHTML = `
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Standard rule: decay weight matrices (dim ≥ 2), leave normalisation params and biases alone (dim &lt; 2).</div>
+    ${rows}
+    <div style="margin-top:12px;background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--muted);line-height:1.65;">
+      In PyTorch: split parameters into two groups by <code>p.dim() &gt;= 2</code> (matrices → decay) vs <code>p.dim() &lt; 2</code> (norms/biases → no decay). Pass both groups to AdamW with different <code>weight_decay</code> values. This is why you see two <code>param_groups</code> in most transformer training scripts.
+    </div>`;
+}
+
+const RENDERS = [renderTab0, renderTab1, renderTab2];
+let cur = 0;
+const tabEl = document.getElementById('tabs');
+TABS.forEach((t,i)=>{
+  const el = document.createElement('div');
+  el.className = 'tab' + (i===cur?' on':'');
+  el.textContent = t.label;
+  el.onclick = () => {
+    cur = i;
+    document.querySelectorAll('.tab').forEach((x,j)=>x.classList.toggle('on',j===i));
+    RENDERS[i]();
+  };
+  tabEl.appendChild(el);
+});
+RENDERS[0]();
+</script>
+</body>
+</html>
