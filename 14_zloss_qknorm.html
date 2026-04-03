@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>14 — Z-loss & QK-norm · LLM Notes</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .tab { padding:5px 14px; border-radius:6px; font-size:12px; font-weight:500; cursor:pointer; border:1px solid var(--border); background:var(--bg2); color:var(--muted); transition:all .14s; white-space:nowrap; }
+  .tab:hover { background:var(--bg3); color:var(--text); }
+  .tab.on { background:#0C2244; border-color:#185FA5; color:#85B7EB; }
+
+  .ins { background:var(--bg2); border:0.5px solid var(--border); border-radius:var(--radius); padding:10px 14px; font-size:12px; color:var(--muted); line-height:1.65; margin-top:10px; }
+  .ins strong { color:var(--text); font-weight:500; }
+  .ins code { font-size:11px; }
+
+  .chip-row { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0; }
+  .chip { font-size:11px; font-family:var(--mono); background:var(--bg3); border:0.5px solid var(--border); border-radius:4px; padding:3px 9px; color:var(--muted); }
+  .chip b { color:var(--text); font-weight:500; }
+
+  .ctrl-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+  .ctrl-row label { font-size:12px; color:var(--muted); white-space:nowrap; }
+  .ctrl-row output { font-family:var(--mono); font-size:12px; font-weight:500; color:var(--text); min-width:40px; }
+
+  table.cmp { width:100%; border-collapse:collapse; font-size:13px; margin:12px 0; }
+  table.cmp th { text-align:left; font-weight:500; color:var(--muted); font-size:11px; letter-spacing:.05em; text-transform:uppercase; padding:6px 10px; border-bottom:1px solid var(--border); }
+  table.cmp td { padding:8px 10px; border-bottom:0.5px solid var(--border); color:var(--text); vertical-align:top; font-size:12px; }
+  table.cmp td:first-child { color:var(--muted); font-weight:500; white-space:nowrap; }
+  table.cmp tr:last-child td { border-bottom:none; }
+</style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <nav class="nav">
+    <a class="nav-home" href="index.html">← LLM Notes</a>
+    <span class="nav-title">14 / Z-loss & QK-norm</span>
+  </nav>
+
+  <div class="page-header">
+    <div class="tag">Training stability</div>
+    <h1>Z-loss & QK-norm</h1>
+    <p class="subtitle">Two techniques that fix the same root problem — unbounded magnitude growth — in two different places</p>
+  </div>
+
+  <h2>The shared root problem</h2>
+  <p>Both z-loss and QK-norm solve the same underlying issue from two different angles: <em>unbounded growth during training</em>. As a transformer trains, values at various points in the computation can drift to large magnitudes. When they do, softmax — which appears both in the output layer and inside every attention head — saturates: it peaks sharply toward one option, crushes everything else to near zero, and gradients nearly vanish. Training slows catastrophically or crashes entirely.</p>
+
+  <h2>Part 1 — Z-loss</h2>
+  <p>The LM head projects the final residual stream to V logits (one per vocabulary token). Softmax converts them to probabilities. Cross-entropy loss is <code>−log(p_correct)</code>.</p>
+  <p>The problem: softmax is invariant to <em>additive shifts</em> but not to <em>scaling</em>. If you scale all logits up together, every token's probability sharpens. During training, nothing in the standard loss prevents logits from growing in absolute magnitude. The model can freely increase confidence on training examples just by scaling logits up — because the correct token's probability rises even if all logits grow proportionally.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">Z-loss — three views</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;" id="ztabs"></div>
+    <div id="zpanel"></div>
+  </div>
+
+  <h3>The three consequences of logit drift</h3>
+  <p><strong>Numerical overflow.</strong> <code>exp(x)</code> overflows float16 for x > ~65,000 and float32 for x > ~88. Logits in the thousands cause silent NaN propagation that crashes training runs.</p>
+  <p><strong>Softmax saturation.</strong> When one logit is much larger than others, it gets probability ≈ 1 and all others ≈ 0. The gradient of softmax is <code>p(1−p)</code> — at p ≈ 1, this is nearly zero. Gradients stop flowing and learning stalls.</p>
+  <p><strong>Loss spikes.</strong> When a saturated model is confidently wrong, the loss is <code>−log(ε) → ∞</code>. One bad batch can blow up a training run.</p>
+
+  <h3>The fix — z-loss formula</h3>
+  <pre><code>z       = log( Σⱼ exp(logits[j]) )   # log-sum-exp = "partition function"
+L_total = L_cross_entropy + ε · z²   # ε ≈ 1e-4 to 1e-5
+
+# Gradient of ε·z² w.r.t. logit j:
+∂L_zloss/∂logitⱼ = 2ε · z · softmax(j)
+# Pushes all logits down, larger ones pushed harder</code></pre>
+
+  <p>Z is the log-partition function — it measures the total mass of the logit distribution. When logits are large and spread out, z is large. Penalising z² pushes the model to keep logits at a moderate absolute scale. The model still learns relative differences between logits (all that matters for predictions), but absolute magnitudes are contained.</p>
+
+  <div class="card-accent">
+    <strong>ε must be tiny.</strong> Values like 1e-4 or 1e-5 mean z-loss barely affects normal training — it only activates as a strong corrective when logits grow unreasonably large. Setting ε too high degrades task performance by over-constraining the logit distribution. Z-loss was introduced and named in the PaLM paper (Google, 2022).
+  </div>
+
+  <h2>Part 2 — QK-norm</h2>
+  <p>Inside every attention head, the score between token i and token j is:</p>
+
+  <pre><code>score(i, j) = Qᵢ · Kⱼ / √d_head</code></pre>
+
+  <p>The <code>√d_head</code> denominator was chosen so that when Q and K are unit-variance random vectors <em>at initialisation</em>, scores have variance ≈ 1 — keeping softmax from saturating at the start. The problem: this assumption breaks during training.</p>
+  <p>Q and K are produced by projecting the residual stream: <code>Q = x·Wq</code>, <code>K = x·Wk</code>. As training progresses the residual stream accumulates contributions from all L layers through residual connections — it grows in norm. Q and K grow with it. The <code>√d_head</code> denominator is fixed, so when Q and K norms double, scores quadruple. When they grow 5×, scores grow 25×. At 80+ layers, this drift can be severe.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">QK-norm — three views</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;" id="qktabs"></div>
+    <div id="qkpanel"></div>
+  </div>
+
+  <h3>The fix — QK-norm formula</h3>
+  <pre><code># Standard attention (no QK-norm):
+Q = x @ Wq                          # [T, d_head] — norm can drift
+K = x @ Wk
+scores = Q @ K.T / sqrt(d_head)
+
+# With QK-norm:
+Q = x @ Wq
+K = x @ Wk
+Q = RMSNorm(Q) * γ_q                # normalise → unit RMS, then rescale
+K = RMSNorm(K) * γ_k                # γ is a learned scalar per head
+scores = Q @ K.T / sqrt(d_head)     # now always bounded</code></pre>
+
+  <p>RMSNorm divides each vector by its own root-mean-square, forcing <code>‖Q‖ ≈ √d_head</code> and <code>‖K‖ ≈ √d_head</code> regardless of what the residual stream is doing. The learned scalar γ (one per head) lets the model control the overall scale of scores through this small controlled parameter — not through unconstrained drift of the entire Q/K space.</p>
+
+  <div class="card-green">
+    <strong>Cost:</strong> almost nothing. Two RMSNorm operations per layer (very cheap) and 2 × H × L learned scalars (e.g. for a 32-layer, 32-head model: 2 × 32 × 32 = 2,048 extra parameters out of billions). QK-norm is used in Gemma 2, Gemini, and several other recent high-quality models. Particularly valuable at large scale and large depth.
+  </div>
+
+  <h2>Side by side</h2>
+
+  <table class="cmp">
+    <thead><tr><th></th><th>Z-loss</th><th>QK-norm</th></tr></thead>
+    <tbody>
+      <tr><td>Where applied</td><td>Output logits, before final softmax</td><td>Q and K inside every attention head</td></tr>
+      <tr><td>What drifts</td><td>Logit magnitudes</td><td>Q and K vector norms</td></tr>
+      <tr><td>What breaks</td><td>Output softmax saturation, overflow</td><td>Attention softmax saturation</td></tr>
+      <tr><td>Fix mechanism</td><td>Quadratic penalty on log-sum-exp(logits)</td><td>RMSNorm applied to Q and K</td></tr>
+      <tr><td>Extra params</td><td>None — just a loss term</td><td>2 × H × L learned scalars (γ_q, γ_k)</td></tr>
+      <tr><td>Extra compute</td><td>Tiny — one log-sum-exp per step</td><td>Tiny — two RMSNorm ops per layer</td></tr>
+      <tr><td>Hyperparameter</td><td>ε (penalty weight, e.g. 1e-4)</td><td>γ initialised to 1, learned</td></tr>
+      <tr><td>Used by</td><td>PaLM, PaLM 2, Gemma</td><td>Gemma 2, Gemini</td></tr>
+    </tbody>
+  </table>
+
+  <dl class="key-concept">
+    <dt>Logit drift</dt><dd>Unbounded growth of raw output logit magnitudes during training. Causes softmax saturation, overflow, and loss spikes.</dd>
+    <dt>Log-sum-exp (z)</dt><dd>log(Σ exp(logits)). The log-partition function. Large when logits are large or spread out. Z-loss penalises its square.</dd>
+    <dt>QK magnitude explosion</dt><dd>Q and K norms growing as the residual stream accumulates across layers. Makes attention scores grow quadratically, saturating softmax.</dd>
+    <dt>Softmax saturation</dt><dd>When one input dominates, softmax output ≈ 1 for that input, ≈ 0 for all others. Gradient p(1−p) ≈ 0. Learning stops.</dd>
+    <dt>√d_head scaling</dt><dd>The standard attention denominator. Designed for unit-variance Q and K at initialisation. Stops working when Q/K norms grow during training.</dd>
+    <dt>γ (QK-norm scale)</dt><dd>Learned scalar per head applied after RMSNorm. Lets the model control score magnitude explicitly rather than implicitly through Q/K drift.</dd>
+  </dl>
+
+</div>
+
+<script>
+const dark = window.matchMedia('(prefers-color-scheme:dark)').matches;
+
+function mkCv(id, w, h) {
+  const cv = document.getElementById(id);
+  cv.width = w; cv.height = h;
+  cv.style.cssText = `width:100%;height:${h}px;border-radius:8px;display:block;` +
+    `background:${dark?'#13161b':'#f5f5f3'};border:0.5px solid ${dark?'#2a2f3a':'#d3d1c7'};margin-bottom:8px;`;
+  return cv;
+}
+
+function drawAxes(ctx, W, H, PAD, minY, maxY, xlabel) {
+  const gc = dark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)';
+  ctx.strokeStyle=gc; ctx.lineWidth=0.5;
+  [0.25,0.5,0.75].forEach(t => {
+    const y = PAD+(1-t)*(H-2*PAD);
+    ctx.beginPath();ctx.moveTo(PAD,y);ctx.lineTo(W-PAD,y);ctx.stroke();
+    const val = minY+t*(maxY-minY);
+    ctx.fillStyle=dark?'rgba(255,255,255,0.3)':'rgba(0,0,0,0.3)';
+    ctx.font='10px monospace';ctx.textAlign='right';ctx.fillText(val.toFixed(1),PAD-3,y+4);
+  });
+  if(xlabel){
+    ctx.fillStyle=dark?'rgba(255,255,255,0.3)':'rgba(0,0,0,0.3)';
+    ctx.font='10px monospace';ctx.textAlign='center';ctx.fillText(xlabel,W/2,H-3);
+  }
+}
+
+function drawLine(ctx, data, W, H, PAD, minY, maxY, color, lw, dash) {
+  ctx.strokeStyle=color;ctx.lineWidth=lw||2;ctx.setLineDash(dash||[]);ctx.beginPath();
+  data.forEach((v,i)=>{
+    const x=PAD+i/(data.length-1)*(W-2*PAD);
+    const y=PAD+(1-(Math.max(minY,Math.min(maxY,v))-minY)/(maxY-minY))*(H-2*PAD);
+    i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+  });
+  ctx.stroke();ctx.setLineDash([]);
+}
+
+function legend(ctx, items, PAD) {
+  items.forEach(({label,color,dash},i)=>{
+    ctx.strokeStyle=color;ctx.lineWidth=2;ctx.setLineDash(dash||[]);
+    ctx.beginPath();ctx.moveTo(PAD,PAD+14+i*16);ctx.lineTo(PAD+20,PAD+14+i*16);ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle=dark?'rgba(255,255,255,0.45)':'rgba(0,0,0,0.45)';
+    ctx.font='10px monospace';ctx.textAlign='left';ctx.fillText(label,PAD+24,PAD+18+i*16);
+  });
+}
+
+function softmax(arr){
+  const m=Math.max(...arr),e=arr.map(x=>Math.exp(x-m)),s=e.reduce((a,b)=>a+b,0);
+  return e.map(x=>x/s);
+}
+
+// ── Z-LOSS TABS ──────────────────────────────────────────────────────────────
+
+const ZTABS_DEF=[
+  {label:'The problem — logit drift'},
+  {label:'What z² penalises'},
+  {label:'Effect on softmax distribution'},
+];
+let zcur=0;
+
+function zRender0(){
+  document.getElementById('zpanel').innerHTML=`
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">Logit magnitude growing over training — red = no z-loss, green = with z-loss</div>
+    <canvas id="z0cv"></canvas>
+    <div class="ins">
+      <strong>Logit drift:</strong> during training nothing stops raw logit values from growing arbitrarily large. The model can increase confidence on training examples just by scaling all logits up — softmax is invariant to additive shifts but sharpens with scale. This leads to: (1) numerical overflow in fp16, (2) softmax saturation where one token gets probability ≈ 1, (3) catastrophic loss spikes when the saturated model is wrong. Z-loss directly penalises large logit norms to prevent all three.
+    </div>`;
+  const cv=mkCv('z0cv',560,180);
+  const ctx=cv.getContext('2d'),W=cv.width,H=cv.height,PAD=36;
+  const N=100;
+  const noZ=Array.from({length:N},(_,i)=>1+i*0.08+Math.sin(i*0.4)*0.3);
+  const wZ=Array.from({length:N},(_,i)=>1+0.6*(1-Math.exp(-i*0.04))+Math.sin(i*0.4)*0.08);
+  const minY=0,maxY=Math.max(...noZ)*1.05;
+  drawAxes(ctx,W,H,PAD,minY,maxY,'training steps →');
+  drawLine(ctx,noZ,W,H,PAD,minY,maxY,'#A32D2D',2.5);
+  drawLine(ctx,wZ,W,H,PAD,minY,maxY,'#0F6E56',2.5);
+  legend(ctx,[{label:'without z-loss (drifts up)',color:'#A32D2D'},{label:'with z-loss (stays bounded)',color:'#0F6E56'}],PAD);
+}
+
+function zRender1(){
+  document.getElementById('zpanel').innerHTML=`
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">Z-loss = ε · z² where z = log-sum-exp(logits). Quadratic penalty on the partition function.</div>
+    <canvas id="z1cv"></canvas>
+    <div style="font-family:var(--mono);font-size:12px;background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--radius);padding:10px 14px;line-height:1.9;margin:8px 0;white-space:pre;overflow-x:auto;color:var(--text);">z       = log( Σⱼ exp(logitsⱼ) )   <span style="color:var(--muted);"># log-partition function</span>
+L_zloss = ε · z²                    <span style="color:var(--muted);"># ε ≈ 1e-4</span>
+∂L/∂zⱼ = 2ε · z · softmax(j)       <span style="color:var(--muted);"># pushes all logits down</span></div>
+    <div class="ins">
+      <strong>Why log-sum-exp?</strong> It measures the total mass of the logit distribution — large when logits are large or spread. Penalising z² keeps absolute logit scale moderate without touching relative differences (where all prediction information lives). The gradient 2ε·z·softmax(j) is proportional to z (how big logits are) and softmax(j) (how much each logit contributes) — larger logits are pushed down harder.
+    </div>`;
+  const cv=mkCv('z1cv',560,180);
+  const ctx=cv.getContext('2d'),W=cv.width,H=cv.height,PAD=36;
+  const zv=Array.from({length:100},(_,i)=>-2+i*0.14);
+  const pen=zv.map(z=>z*z);
+  const gr=zv.map(z=>2*z);
+  const minY=Math.min(...gr),maxY=Math.max(...pen);
+  drawAxes(ctx,W,H,PAD,minY,maxY,'z = log-sum-exp(logits) →');
+  const zy=PAD+(1-(0-minY)/(maxY-minY))*(H-2*PAD);
+  ctx.strokeStyle=dark?'rgba(255,255,255,0.15)':'rgba(0,0,0,0.15)';ctx.lineWidth=0.8;
+  ctx.beginPath();ctx.moveTo(PAD,zy);ctx.lineTo(W-PAD,zy);ctx.stroke();
+  drawLine(ctx,pen,W,H,PAD,minY,maxY,'#7F77DD',2.5);
+  drawLine(ctx,gr,W,H,PAD,minY,maxY,'#BA7517',1.5,[4,3]);
+  legend(ctx,[{label:'z² penalty',color:'#7F77DD'},{label:'gradient = 2z (dashed)',color:'#BA7517',dash:[4,3]}],PAD);
+}
+
+function zRender2(){
+  document.getElementById('zpanel').innerHTML=`
+    <div class="ctrl-row">
+      <label>Logit scale multiplier:</label>
+      <input type="range" min="0.1" max="20" step="0.1" value="2" id="lscale" oninput="updateZ2()" style="width:130px;">
+      <output id="lscale-out">×2.0</o>
+    </div>
+    <canvas id="z2cv"></canvas>
+    <div class="chip-row" id="z2stats"></div>
+    <div class="ins" id="z2ins"></div>`;
+  updateZ2();
+}
+window.updateZ2=function(){
+  const scale=parseFloat(document.getElementById('lscale').value);
+  document.getElementById('lscale-out').textContent='×'+scale.toFixed(1);
+  const base=[-2.1,0.4,3.2,-1.8,1.1,-0.5,2.0,-1.2,0.8,-0.3];
+  const logits=base.map(l=>l*scale);
+  const m=Math.max(...logits),exps=logits.map(l=>Math.exp(l-m));
+  const sumE=exps.reduce((a,b)=>a+b,0);
+  const probs=exps.map(e=>e/sumE);
+  const z=Math.log(sumE)+m;
+  const penalty=z*z;
+  const entropy=-probs.reduce((s,p)=>s+(p>1e-10?p*Math.log(p):0),0);
+  const maxP=Math.max(...probs);
+  const cv=mkCv('z2cv',560,160);
+  const ctx=cv.getContext('2d'),W=cv.width,H=cv.height,PAD=30;
+  const bw=(W-2*PAD)/logits.length-4;
+  probs.forEach((p,i)=>{
+    const x=PAD+i*(W-2*PAD)/logits.length+2;
+    const bh=Math.max(2,p*(H-2*PAD));
+    ctx.fillStyle=(p===maxP?'#0F6E56':'#185FA5')+(scale>5?'ee':'88');
+    ctx.fillRect(x,H-PAD-bh,bw,bh);
+    ctx.fillStyle=dark?'rgba(255,255,255,0.35)':'rgba(0,0,0,0.35)';
+    ctx.font='9px monospace';ctx.textAlign='center';
+    if(p>0.015)ctx.fillText((p*100).toFixed(1)+'%',x+bw/2,H-PAD-bh-3);
+  });
+  document.getElementById('z2stats').innerHTML=
+    `<div class="chip">log-sum-exp z: <b>${z.toFixed(2)}</b></div>`+
+    `<div class="chip">z² penalty: <b>${penalty.toFixed(1)}</b></div>`+
+    `<div class="chip">max prob: <b>${(maxP*100).toFixed(1)}%</b></div>`+
+    `<div class="chip">entropy: <b>${entropy.toFixed(3)}</b></div>`;
+  document.getElementById('z2ins').innerHTML=scale<2
+    ?`Small logits → flat uncertain distribution. Low z-loss penalty (${penalty.toFixed(1)}). High entropy. Early training looks like this.`
+    :scale<7
+    ?`Moderate logits → reasonable distribution. Z-loss penalty = ${penalty.toFixed(1)}. This is the healthy range z-loss maintains.`
+    :`<strong>Large logits → collapsed distribution.</strong> One token: ${(maxP*100).toFixed(0)}%. Z-loss penalty = ${penalty.toFixed(1)} — the quadratic kicks in hard, pushing gradients back toward reasonable scale. Without z-loss, logits can freely grow this extreme.`;
+};
+
+// ── QK-NORM TABS ─────────────────────────────────────────────────────────────
+
+const QKTABS_DEF=[
+  {label:'The problem — QK magnitude growth'},
+  {label:'Attention softmax saturation'},
+  {label:'QK-norm — the fix'},
+];
+let qkcur=0;
+
+function qkRender0(){
+  document.getElementById('qkpanel').innerHTML=`
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">Q and K norms growing over training — score grows as their product, not linearly</div>
+    <canvas id="qk0cv"></canvas>
+    <div class="ins">
+      <strong>The problem:</strong> Q = x·Wq and K = x·Wk. The residual stream x accumulates contributions from all L layers through residual connections and grows in norm. Q and K grow with it. The attention score is Q·K/√d_head — the √d_head denominator was fixed at init for unit-variance vectors. When Q and K norms double, scores quadruple. At 80+ layers this drift can be severe, causing softmax in attention to collapse in many heads simultaneously.
+    </div>`;
+  const cv=mkCv('qk0cv',560,180);
+  const ctx=cv.getContext('2d'),W=cv.width,H=cv.height,PAD=36;
+  const N=100;
+  const Qn=Array.from({length:N},(_,i)=>1+i*0.06+Math.sin(i*0.5)*0.15);
+  const Kn=Array.from({length:N},(_,i)=>1+i*0.05+Math.cos(i*0.4)*0.12);
+  const sg=Qn.map((q,i)=>q*Kn[i]);
+  const minY=0,maxY=Math.max(...sg)*1.05;
+  drawAxes(ctx,W,H,PAD,minY,maxY,'training steps →');
+  drawLine(ctx,Qn,W,H,PAD,minY,maxY,'#185FA5',2);
+  drawLine(ctx,Kn,W,H,PAD,minY,maxY,'#7F77DD',2);
+  drawLine(ctx,sg,W,H,PAD,minY,maxY,'#A32D2D',2.5);
+  legend(ctx,[{label:'‖Q‖',color:'#185FA5'},{label:'‖K‖',color:'#7F77DD'},{label:'‖Q‖·‖K‖ (score growth)',color:'#A32D2D'}],PAD);
+}
+
+function qkRender1(){
+  document.getElementById('qkpanel').innerHTML=`
+    <div class="ctrl-row">
+      <label>QK vector scale:</label>
+      <input type="range" min="0.2" max="8" step="0.1" value="1" id="qkscale" oninput="updateQK1()" style="width:130px;">
+      <output id="qkscale-out">×1.0</o>
+    </div>
+    <canvas id="qk1cv"></canvas>
+    <div class="chip-row" id="qk1stats"></div>
+    <div class="ins" id="qk1ins"></div>`;
+  updateQK1();
+}
+window.updateQK1=function(){
+  const scale=parseFloat(document.getElementById('qkscale').value);
+  document.getElementById('qkscale-out').textContent='×'+scale.toFixed(1);
+  const base=[-1.2,0.3,2.1,-0.8,1.5,-0.4,0.9,-1.1,0.2,1.8,-0.6,0.7];
+  const scores=base.map(s=>s*scale*scale);
+  const weights=softmax(scores);
+  const maxW=Math.max(...weights);
+  const entropy=-weights.reduce((s,p)=>s+(p>1e-10?p*Math.log(p):0),0);
+  const cv=mkCv('qk1cv',560,160);
+  const ctx=cv.getContext('2d'),W=cv.width,H=cv.height,PAD=30;
+  const bw=(W-2*PAD)/weights.length-4;
+  weights.forEach((w,i)=>{
+    const x=PAD+i*(W-2*PAD)/weights.length+2;
+    const bh=Math.max(2,w*(H-2*PAD-10));
+    ctx.fillStyle=(w===maxW?'#A32D2D':'#185FA5')+(scale>3?'ee':'88');
+    ctx.fillRect(x,H-PAD-bh,bw,bh);
+    ctx.fillStyle=dark?'rgba(255,255,255,0.35)':'rgba(0,0,0,0.35)';
+    ctx.font='9px monospace';ctx.textAlign='center';
+    if(w>0.015)ctx.fillText((w*100).toFixed(1)+'%',x+bw/2,H-PAD-bh-3);
+  });
+  document.getElementById('qk1stats').innerHTML=
+    `<div class="chip">max weight: <b>${(maxW*100).toFixed(1)}%</b></div>`+
+    `<div class="chip">entropy: <b>${entropy.toFixed(3)}</b></div>`+
+    `<div class="chip">softmax gradient scale: <b>${(maxW*(1-maxW)).toFixed(4)}</b></div>`;
+  document.getElementById('qk1ins').innerHTML=scale<1.5
+    ?`Healthy distribution. Attention spread across multiple tokens. Gradients flowing well.`
+    :scale<3.5
+    ?`Attention concentrating. Some tokens dominating. Starting to lose multi-position information.`
+    :`<strong>Attention collapse.</strong> One token: ${(maxW*100).toFixed(0)}% weight. Softmax gradient ≈ ${(maxW*(1-maxW)).toFixed(4)} — nearly zero. <strong>This head has stopped learning.</strong> QK-norm keeps Q and K at unit scale, preventing this entirely.`;
+};
+
+function qkRender2(){
+  document.getElementById('qkpanel').innerHTML=`
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">QK-norm bounds score magnitude regardless of residual stream growth</div>
+    <div style="font-family:var(--mono);font-size:12px;background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--radius);padding:10px 14px;line-height:1.9;margin-bottom:10px;white-space:pre;overflow-x:auto;color:var(--text);"><span style="color:var(--muted);"># Standard attention:</span>
+Q = x @ Wq                  <span style="color:var(--muted);"># norm can drift to anything</span>
+K = x @ Wk
+scores = Q @ K.T / sqrt(Dh)
+
+<span style="color:var(--muted);"># With QK-norm:</span>
+Q = x @ Wq
+K = x @ Wk
+Q = RMSNorm(Q) * γ_q        <span style="color:var(--muted);"># ‖Q‖ forced to √Dh · |γ_q|</span>
+K = RMSNorm(K) * γ_k        <span style="color:var(--muted);"># γ is learned per head</span>
+scores = Q @ K.T / sqrt(Dh) <span style="color:var(--muted);"># always bounded</span></div>
+    <canvas id="qk2cv"></canvas>
+    <div class="ins">
+      <strong>How it works:</strong> RMSNorm divides each Q and K vector by its own RMS, forcing ‖Q‖ ≈ 1 (before γ scaling). A learned scalar γ per head then multiplies in — the model can still choose the scale of scores, but only through this small explicit γ, not through unconstrained drift. Attention score magnitudes stay bounded throughout training. Every head in every layer keeps learning even after 80+ layers and trillions of training tokens. Cost: two cheap RMSNorm ops per layer plus 2·H·L scalar parameters.
+    </div>`;
+  const cv=mkCv('qk2cv',560,180);
+  const ctx=cv.getContext('2d'),W=cv.width,H=cv.height,PAD=36;
+  const N=80;
+  const noN=Array.from({length:N},(_,i)=>1+i*0.09+Math.sin(i*0.5)*0.2);
+  const wN=Array.from({length:N},(_,i)=>1+0.3*(1-Math.exp(-i*0.05))+Math.sin(i*0.5)*0.04);
+  const minY=0,maxY=Math.max(...noN)*1.05;
+  drawAxes(ctx,W,H,PAD,minY,maxY,'training steps →');
+  drawLine(ctx,noN,W,H,PAD,minY,maxY,'#A32D2D',2.5);
+  drawLine(ctx,wN,W,H,PAD,minY,maxY,'#0F6E56',2.5);
+  legend(ctx,[{label:'‖Q‖·‖K‖ without QK-norm',color:'#A32D2D'},{label:'‖Q‖·‖K‖ with QK-norm (bounded)',color:'#0F6E56'}],PAD);
+}
+
+// ── Wire up tabs ─────────────────────────────────────────────────────────────
+
+const ZR=[zRender0,zRender1,zRender2];
+const ztabEl=document.getElementById('ztabs');
+ZTABS_DEF.forEach((t,i)=>{
+  const el=document.createElement('div');el.className='tab'+(i===zcur?' on':'');el.textContent=t.label;
+  el.onclick=()=>{zcur=i;document.querySelectorAll('#ztabs .tab').forEach((x,j)=>x.classList.toggle('on',j===i));ZR[i]();};
+  ztabEl.appendChild(el);
+});
+ZR[0]();
+
+const QKR=[qkRender0,qkRender1,qkRender2];
+const qktabEl=document.getElementById('qktabs');
+QKTABS_DEF.forEach((t,i)=>{
+  const el=document.createElement('div');el.className='tab'+(i===qkcur?' on':'');el.textContent=t.label;
+  el.onclick=()=>{qkcur=i;document.querySelectorAll('#qktabs .tab').forEach((x,j)=>x.classList.toggle('on',j===i));QKR[i]();};
+  qktabEl.appendChild(el);
+});
+QKR[0]();
+</script>
+</body>
+</html>
