@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>16 — STAPLE · LLM Notes</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .tab { padding:5px 14px; border-radius:6px; font-size:12px; font-weight:500; cursor:pointer; border:1px solid var(--border); background:var(--bg2); color:var(--muted); transition:all .14s; white-space:nowrap; }
+  .tab:hover { background:var(--bg3); }
+  .tab.on { background:#0C2244; border-color:#185FA5; color:#85B7EB; }
+
+  .cell { width:36px; height:28px; border-radius:4px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:500; font-family:var(--mono); border:0.5px solid; flex-shrink:0; }
+  .row-wrap { display:flex; gap:3px; align-items:center; margin-bottom:3px; }
+  .row-lbl { font-size:10px; font-family:var(--mono); color:var(--muted); width:38px; text-align:right; flex-shrink:0; }
+  .col-lbl { font-size:10px; font-family:var(--mono); color:var(--muted); text-align:center; flex-shrink:0; }
+
+  .ctrl-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+  .ctrl-row label { font-size:12px; color:var(--muted); white-space:nowrap; }
+  .ctrl-row output { font-family:var(--mono); font-size:13px; font-weight:500; color:var(--text); min-width:40px; }
+
+  .cm-table { border-collapse:collapse; font-size:12px; }
+  .cm-table td, .cm-table th { padding:8px 12px; border:0.5px solid var(--border); text-align:center; }
+  .cm-table .cm-tp { background:rgba(15,110,86,0.15); color:#1D9E75; font-weight:500; }
+  .cm-table .cm-tn { background:rgba(15,110,86,0.15); color:#1D9E75; font-weight:500; }
+  .cm-table .cm-fp { background:rgba(163,45,45,0.15); color:#A32D2D; font-weight:500; }
+  .cm-table .cm-fn { background:rgba(163,45,45,0.15); color:#A32D2D; font-weight:500; }
+  .cm-table .cm-hdr { background:var(--bg3); color:var(--muted); font-size:11px; font-weight:500; }
+
+  .dot-grid { display:flex; flex-wrap:wrap; gap:3px; max-width:280px; }
+  .dot { width:18px; height:18px; border-radius:50%; border:2px solid; transition:all .2s; }
+
+  .qual-row { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+  .qual-name { width:72px; flex-shrink:0; font-size:12px; font-weight:500; }
+  .qual-bar-bg { flex:1; height:12px; background:var(--bg3); border-radius:3px; overflow:hidden; position:relative; }
+  .qual-bar-fill { height:100%; border-radius:3px; transition:width .5s; }
+  .qual-val { font-family:var(--mono); font-size:11px; color:var(--text); min-width:44px; text-align:right; }
+
+  .ins { background:var(--bg2); border:0.5px solid var(--border); border-radius:var(--radius); padding:10px 14px; font-size:12px; color:var(--muted); line-height:1.65; margin-top:10px; }
+  .ins strong { color:var(--text); font-weight:500; }
+
+  .chip { font-size:11px; font-family:var(--mono); background:var(--bg3); border:0.5px solid var(--border); border-radius:4px; padding:3px 9px; color:var(--muted); }
+  .chip b { color:var(--text); font-weight:500; }
+  .chip-row { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0; }
+
+  .profile-btns { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+  .pbtn { padding:4px 10px; border-radius:5px; font-size:11px; cursor:pointer; border:0.5px solid var(--border); background:var(--bg3); color:var(--muted); transition:all .13s; }
+  .pbtn:hover { background:var(--bg2); color:var(--text); }
+</style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <nav class="nav">
+    <a class="nav-home" href="index.html">← LLM Notes</a>
+    <span class="nav-title">16 / STAPLE</span>
+  </nav>
+
+  <div class="page-header">
+    <div class="tag">Annotation & evaluation</div>
+    <h1>STAPLE</h1>
+    <p class="subtitle">Simultaneous Truth and Performance Level Estimation — combining noisy annotators without ground truth</p>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       SECTION 1 — SENSITIVITY & SPECIFICITY
+  ══════════════════════════════════════════════════════════ -->
+
+  <h2>Sensitivity & specificity — from the beginning</h2>
+  <p>Before STAPLE makes sense, you need a firm grip on sensitivity and specificity. They describe the two independent ways an annotator (or any binary classifier) can be right or wrong.</p>
+  <p>Every item has a true label (positive or negative) and an annotator assigns a predicted label (1 or 0). This produces four possible outcomes:</p>
+
+  <div style="overflow-x:auto;margin:16px 0;">
+    <table class="cm-table">
+      <thead>
+        <tr>
+          <th class="cm-hdr" colspan="2" rowspan="2"></th>
+          <th class="cm-hdr" colspan="2">Annotator says</th>
+        </tr>
+        <tr>
+          <th class="cm-hdr">1 (positive)</th>
+          <th class="cm-hdr">0 (negative)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th class="cm-hdr" rowspan="2" style="writing-mode:vertical-lr;transform:rotate(180deg);padding:12px 6px;">True label</th>
+          <th class="cm-hdr">1 (positive)</th>
+          <td class="cm-tp">True Positive (TP)<br><small>Correctly found</small></td>
+          <td class="cm-fn">False Negative (FN)<br><small>Missed it</small></td>
+        </tr>
+        <tr>
+          <th class="cm-hdr">0 (negative)</th>
+          <td class="cm-fp">False Positive (FP)<br><small>False alarm</small></td>
+          <td class="cm-tn">True Negative (TN)<br><small>Correctly absent</small></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p><strong>Sensitivity (p)</strong> — also called recall or true positive rate — answers: <em>"Given that the true label IS positive, how often does the annotator say positive?"</em></p>
+
+  <pre><code>sensitivity p = TP / (TP + FN) = P(annotate=1 | truth=1)
+
+p = 1.0 → never misses a positive (perfect recall)
+p = 0.5 → misses half of all positives (random)
+p = 0.0 → always labels positives as negative (worst)</code></pre>
+
+  <p><strong>Specificity (q)</strong> — also called true negative rate — answers: <em>"Given that the true label IS negative, how often does the annotator say negative?"</em></p>
+
+  <pre><code>specificity q = TN / (FP + TN) = P(annotate=0 | truth=0)
+
+q = 1.0 → never raises a false alarm (perfect at negatives)
+q = 0.5 → randomly labels half of negatives as positive
+q = 0.0 → always labels negatives as positive (worst)</code></pre>
+
+  <div class="card-accent">
+    <strong>Critical point:</strong> sensitivity and specificity are <em>conditional</em> probabilities — they are defined relative to the true label. They describe the annotator's behaviour, not the item's probability of being positive. An annotator can have high sensitivity and low specificity (a "yes-sayer" who labels everything positive) or vice versa.
+  </div>
+
+  <h2>Interactive confusion matrix</h2>
+  <p>Drag the sliders to change sensitivity and specificity. The dot grid shows 40 items (20 positive = blue outline, 20 negative = red outline). Filled correctly = good label; filled wrong colour = error.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">Sensitivity & specificity — drag sliders or load a profile</div>
+    <div class="profile-btns" id="profile-btns"></div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
+      <div style="flex:1;min-width:200px;">
+        <div class="ctrl-row">
+          <label>Sensitivity p:</label>
+          <input type="range" min="0" max="1" step="0.01" value="0.9" id="pslider" oninput="updateSS()" style="flex:1;">
+          <output id="p-out">0.90</output>
+        </div>
+        <div class="ctrl-row">
+          <label>Specificity q:</label>
+          <input type="range" min="0" max="1" step="0.01" value="0.9" id="qslider" oninput="updateSS()" style="flex:1;">
+          <output id="q-out">0.90</output>
+        </div>
+        <div id="ss-cm" style="margin:12px 0;overflow-x:auto;"></div>
+        <div class="chip-row" id="ss-chips"></div>
+        <div class="ins" id="ss-ins"></div>
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px;">● = positive items &nbsp; ● = negative items<br>Bright fill = correct · faded wrong colour = error</div>
+        <div class="dot-grid" id="dot-grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       SECTION 2 — STAPLE
+  ══════════════════════════════════════════════════════════ -->
+
+  <h2>The multi-annotator problem</h2>
+  <p>You have N items to label. You hire J annotators. They disagree. Who is right?</p>
+  <p>The naive answer is majority vote — take whatever most annotators say. But this treats every annotator as equally reliable. An expert who agrees with one careless annotator gets outvoted by three careless annotators. You're counting votes, not weighting by quality.</p>
+  <p>STAPLE (Warfield et al., 2004) solves this by <strong>simultaneously estimating the hidden true labels and each annotator's reliability from the annotations alone</strong> — no gold standard needed. It uses sensitivity and specificity to model each annotator, and an EM algorithm to fit the model.</p>
+
+  <h2>The STAPLE model</h2>
+  <p>For each annotator j, STAPLE models exactly two numbers:</p>
+
+  <pre><code>p_j = sensitivity = P(annotator j says 1 | true label is 1)
+q_j = specificity = P(annotator j says 0 | true label is 0)</code></pre>
+
+  <p>The true label T_i for item i is hidden (that's what we want to find). STAPLE also estimates the prevalence <code>f = P(T_i = 1)</code>. Given the true label, each annotator's annotation is conditionally independent of the others. So the probability of observing all annotations for item i is:</p>
+
+  <pre><code>P(d_i | T_i=1) = Π_j  p_j^d_ij  ×  (1-p_j)^(1-d_ij)
+P(d_i | T_i=0) = Π_j  (1-q_j)^d_ij  ×  q_j^(1-d_ij)
+
+# d_ij = annotation of item i by annotator j (0 or 1)
+# If T_i=1: annotator j's probability of saying 1 is p_j
+# If T_i=0: annotator j's probability of saying 0 is q_j</code></pre>
+
+  <h2>The EM algorithm — how STAPLE fits the model</h2>
+  <p>STAPLE uses Expectation-Maximization (EM). The hidden variable is T_i (the true label). EM alternates between two steps:</p>
+
+  <pre><code># ── E-step: compute posterior probability of true label ──────
+W_i = P(T_i=1 | all annotations, current p, q, f)
+
+    = [f × Π_j p_j^d_ij(1-p_j)^(1-d_ij)]  /
+      [f × Π_j p_j^d_ij(1-p_j)^(1-d_ij)   +
+       (1-f) × Π_j (1-q_j)^d_ij q_j^(1-d_ij)]
+
+# W_i ≈ 1 → probably positive
+# W_i ≈ 0 → probably negative
+# W_i ≈ 0.5 → uncertain
+
+# ── M-step: update annotator quality estimates ───────────────
+p_j = Σ_i W_i × d_ij  /  Σ_i W_i
+    # fraction of likely-positive items that annotator j labelled 1
+
+q_j = Σ_i (1-W_i) × (1-d_ij)  /  Σ_i (1-W_i)
+    # fraction of likely-negative items that annotator j labelled 0
+
+f   = Σ_i W_i / N
+    # prevalence estimate
+
+# ── Repeat until W_i and parameters stop changing ───────────
+# Initialise: W_i = majority vote, p_j = q_j = 0.8</code></pre>
+
+  <h2>Interactive STAPLE explorer</h2>
+  <p>4 annotators with different quality label 10 items. STAPLE runs 60 EM iterations and recovers the true labels and annotator performance. Click the tabs to explore each view.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">STAPLE in action — annotation matrix · annotator quality · comparison with majority vote</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;" id="staple-tabs"></div>
+    <div id="staple-panel"></div>
+  </div>
+
+  <h2>EM convergence</h2>
+  <p>Watch how the estimated sensitivity (p) and specificity (q) for each annotator converge over EM iterations. The algorithm bootstraps from majority vote — initially everyone looks similar, then the reliable and unreliable annotators separate.</p>
+
+  <div class="widget-wrap">
+    <div class="widget-label">p (sensitivity) and q (specificity) converging over 60 iterations</div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;">
+      <div style="flex:1;min-width:220px;">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">Sensitivity p_j — P(says 1 | truth=1)</div>
+        <canvas id="cv-p" style="display:block;width:100%;border-radius:6px;background:var(--bg2);border:0.5px solid var(--border);"></canvas>
+      </div>
+      <div style="flex:1;min-width:220px;">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">Specificity q_j — P(says 0 | truth=0)</div>
+        <canvas id="cv-q" style="display:block;width:100%;border-radius:6px;background:var(--bg2);border:0.5px solid var(--border);"></canvas>
+      </div>
+    </div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;" id="em-legend"></div>
+    <div class="ins">
+      <strong>Convergence story:</strong> all annotators start with the same estimated p=q=0.8. After just a few iterations, the expert separates from the poor annotator. The EM is self-reinforcing: annotators who agree with the current truth estimate get higher p/q, which makes their future votes count more, which makes the truth estimates more accurate. The algorithm bootstraps quality from disagreement patterns alone.
+    </div>
+  </div>
+
+  <h2>What STAPLE outputs</h2>
+  <ul>
+    <li><strong>W_i for every item</strong>: a posterior probability in [0, 1] that the true label is 1. Threshold at 0.5 for a hard label, or keep as a soft label for training.</li>
+    <li><strong>p_j and q_j for every annotator</strong>: their estimated sensitivity and specificity. Use these to rank annotators, flag low-quality ones, or exclude them.</li>
+    <li><strong>f</strong>: estimated prevalence of positive items in the dataset.</li>
+  </ul>
+
+  <h2>Extensions</h2>
+  <ul>
+    <li><strong>Multi-class STAPLE:</strong> replace sensitivity/specificity with a K×K confusion matrix per annotator — P(annotator says k' | truth is k).</li>
+    <li><strong>Spatial STAPLE:</strong> for medical image segmentation, add a spatial prior (Markov Random Field) so neighbouring voxels inform each other's W estimate.</li>
+    <li><strong>Continuous STAPLE:</strong> for real-valued ratings (1–5 stars), model each annotator with a bias and variance instead of p and q.</li>
+  </ul>
+
+  <h2>In the LLM context</h2>
+  <ul>
+    <li><strong>RLHF preference data:</strong> multiple human raters compare model outputs (A vs B). STAPLE recovers which rater is reliable and produces cleaner preference labels for the reward model.</li>
+    <li><strong>Instruction quality annotation:</strong> multiple raters score instruction-following quality. STAPLE filters noisy labels.</li>
+    <li><strong>Safety annotation:</strong> multiple annotators flag harmful content. Annotator reliability varies widely; STAPLE automatically down-weights noisy flaggers.</li>
+    <li><strong>LLM-as-annotator ensembles:</strong> run the same labeling prompt through multiple LLMs or temperature settings. Treat each LLM as an "annotator" and run STAPLE — often outperforms simple majority vote of LLM outputs.</li>
+  </ul>
+
+  <dl class="key-concept">
+    <dt>Sensitivity p</dt><dd>P(annotate=1 | truth=1). How often an annotator correctly identifies positives. High p = rarely misses real positives.</dd>
+    <dt>Specificity q</dt><dd>P(annotate=0 | truth=0). How often an annotator correctly identifies negatives. High q = rarely raises false alarms.</dd>
+    <dt>W_i</dt><dd>STAPLE's posterior estimate P(T_i=1 | all annotations). The soft true label for item i. The main output of STAPLE.</dd>
+    <dt>EM</dt><dd>Expectation-Maximization. Alternates between estimating hidden variables (W_i) given current params, and updating params given current W_i. Guaranteed to increase likelihood at every step.</dd>
+    <dt>Conditional independence</dt><dd>STAPLE assumes annotators' errors are independent given the true label. Knowing one annotator made an error tells you nothing about another's error.</dd>
+    <dt>Prevalence f</dt><dd>Estimated fraction of items with true label 1. Also learned by STAPLE from the data.</dd>
+    <dt>Yes-sayer / No-sayer</dt><dd>An annotator with high p but low q labels almost everything positive. High q but low p labels almost everything negative. STAPLE identifies both patterns.</dd>
+  </dl>
+
+</div>
+
+<script>
+const dark = window.matchMedia('(prefers-color-scheme:dark)').matches;
+
+// ─── SENSITIVITY / SPECIFICITY WIDGET ────────────────────────────────────────
+
+const N_POS = 20, N_NEG = 20, N_TOT = 40;
+const TRUTH_SS = [...Array(N_POS).fill(1), ...Array(N_NEG).fill(0)];
+
+const PROFILES = [
+  {name:'Expert',    p:0.95, q:0.95},
+  {name:'Good',      p:0.85, q:0.80},
+  {name:'Mediocre',  p:0.70, q:0.65},
+  {name:'Yes-sayer', p:0.95, q:0.20},
+  {name:'Random',    p:0.50, q:0.50},
+];
+
+const PROFILE_BTNS = document.getElementById('profile-btns');
+PROFILES.forEach(pr => {
+  const b = document.createElement('button');
+  b.className = 'pbtn'; b.textContent = pr.name;
+  b.onclick = () => {
+    document.getElementById('pslider').value = pr.p;
+    document.getElementById('qslider').value = pr.q;
+    updateSS();
+  };
+  PROFILE_BTNS.appendChild(b);
+});
+
+function updateSS() {
+  const p = parseFloat(document.getElementById('pslider').value);
+  const q = parseFloat(document.getElementById('qslider').value);
+  document.getElementById('p-out').textContent = p.toFixed(2);
+  document.getElementById('q-out').textContent = q.toFixed(2);
+
+  // Expected counts
+  const TP = Math.round(p * N_POS);
+  const FN = N_POS - TP;
+  const TN = Math.round(q * N_NEG);
+  const FP = N_NEG - TN;
+
+  // Confusion matrix
+  document.getElementById('ss-cm').innerHTML = `
+    <table class="cm-table">
+      <thead>
+        <tr><th class="cm-hdr" colspan="2" rowspan="2"></th><th class="cm-hdr" colspan="2">Annotator says</th></tr>
+        <tr><th class="cm-hdr">1</th><th class="cm-hdr">0</th></tr>
+      </thead>
+      <tbody>
+        <tr><th class="cm-hdr" rowspan="2">Truth</th><th class="cm-hdr">1</th>
+          <td class="cm-tp">TP = ${TP}<br><small>p = ${p.toFixed(2)}</small></td>
+          <td class="cm-fn">FN = ${FN}<br><small>1−p = ${(1-p).toFixed(2)}</small></td></tr>
+        <tr><th class="cm-hdr">0</th>
+          <td class="cm-fp">FP = ${FP}<br><small>1−q = ${(1-q).toFixed(2)}</small></td>
+          <td class="cm-tn">TN = ${TN}<br><small>q = ${q.toFixed(2)}</small></td></tr>
+      </tbody>
+    </table>`;
+
+  const precision = TP + FP > 0 ? TP / (TP + FP) : 0;
+  const accuracy  = (TP + TN) / N_TOT;
+  const f1 = precision + p > 0 ? 2 * precision * p / (precision + p) : 0;
+
+  document.getElementById('ss-chips').innerHTML =
+    `<div class="chip">Sensitivity (recall): <b>${p.toFixed(2)}</b></div>` +
+    `<div class="chip">Specificity: <b>${q.toFixed(2)}</b></div>` +
+    `<div class="chip">Precision: <b>${precision.toFixed(2)}</b></div>` +
+    `<div class="chip">Accuracy: <b>${accuracy.toFixed(2)}</b></div>`;
+
+  const desc = p > 0.85 && q > 0.85
+    ? 'High sensitivity <em>and</em> high specificity — a reliable annotator. Rarely misses positives, rarely raises false alarms.'
+    : p > 0.85 && q < 0.5
+    ? '<strong>Yes-sayer:</strong> labels almost everything positive. High sensitivity (never misses a positive) but terrible specificity (constantly false-alarms on negatives).'
+    : p < 0.5 && q > 0.85
+    ? '<strong>No-sayer:</strong> labels almost everything negative. Rarely raises false alarms on negatives, but misses most real positives.'
+    : p < 0.6 && q < 0.6
+    ? '<strong>Random or noisy:</strong> barely better than flipping a coin. STAPLE will assign low weight to this annotator.'
+    : 'Moderate annotator — makes meaningful but imperfect contributions to both positive and negative items.';
+
+  document.getElementById('ss-ins').innerHTML = desc;
+
+  // Dot grid
+  const grid = document.getElementById('dot-grid');
+  grid.innerHTML = '';
+  const rng = (s) => { let x = Math.sin(s * 9301 + 49297) * 233280; return x - Math.floor(x); };
+  TRUTH_SS.forEach((t, i) => {
+    const r = rng(i * 17 + 3);
+    const predicted = t === 1 ? (r < p ? 1 : 0) : (r < (1 - q) ? 1 : 0);
+    const correct = predicted === t;
+    const baseColor = t === 1 ? '#185FA5' : '#A32D2D';
+    const fillColor = correct ? (t === 1 ? '#185FA5' : '#A32D2D') : (t === 1 ? '#A32D2D' : '#185FA5');
+    const d = document.createElement('div');
+    d.className = 'dot';
+    d.style.cssText = `border-color:${baseColor};background:${fillColor}${correct ? 'cc' : '44'};`;
+    d.title = `Item ${i}: truth=${t}, predicted=${predicted} (${correct ? '✓' : '✗'})`;
+    grid.appendChild(d);
+  });
+}
+updateSS();
+
+// ─── STAPLE DATA & ALGORITHM ─────────────────────────────────────────────────
+
+const TRUTH = [1,1,1,1,1,0,0,0,0,0];
+const ANN_NAMES  = ['Expert','Good','Mediocre','Poor'];
+const ANN_COLORS = ['#0F6E56','#185FA5','#BA7517','#A32D2D'];
+// ANNS[annotator_idx][item_idx]
+const ANNS = [
+  [1,1,1,1,1,0,0,0,0,0],  // Expert  — perfect
+  [1,1,1,0,1,0,0,0,1,0],  // Good    — item3=FN, item8=FP
+  [1,1,0,0,1,1,0,0,0,0],  // Mediocre— item2=FN,item3=FN,item5=FP
+  [0,1,1,0,1,1,0,1,0,1],  // Poor    — item0=FN,item3=FN,item5=FP,item7=FP,item9=FP
+];
+const NI = 10, NJ = 4;
+// D[i][j] = annotation of item i by annotator j
+const D = Array.from({length:NI}, (_,i) => Array.from({length:NJ}, (_,j) => ANNS[j][i]));
+
+function mvote(D) {
+  return D.map(row => { const s=row.reduce((a,b)=>a+b,0); return s>NJ/2?1:s===NJ/2?-1:0; });
+}
+
+function runSTAPLE(D, maxIter=60) {
+  let f=0.5, p=[.8,.8,.8,.8], q=[.8,.8,.8,.8];
+  let W = mvote(D).map(v => v<0?0.5:v);
+  const hist = [];
+  for (let it=0; it<maxIter; it++) {
+    W = D.map(row => {
+      let pos=f, neg=1-f;
+      row.forEach((d,j) => { pos *= d?p[j]:(1-p[j]); neg *= d?(1-q[j]):q[j]; });
+      return pos/(pos+neg+1e-15);
+    });
+    const sW = W.reduce((a,b)=>a+b,0);
+    f = sW/NI;
+    for (let j=0; j<NJ; j++) {
+      let np=0,dp=0,nq=0,dq=0;
+      for (let i=0; i<NI; i++) {
+        np+=W[i]*D[i][j]; dp+=W[i];
+        nq+=(1-W[i])*(1-D[i][j]); dq+=(1-W[i]);
+      }
+      p[j]=np/dp; q[j]=nq/dq;
+    }
+    hist.push({W:[...W],p:[...p],q:[...q],f});
+  }
+  return {W,p,q,f,hist};
+}
+
+const MV = mvote(D);
+const RES = runSTAPLE(D);
+
+// ─── STAPLE TABS ─────────────────────────────────────────────────────────────
+
+function cs(v) {
+  if (v===1) return {bg:dark?'rgba(15,110,86,0.3)':'rgba(15,110,86,0.15)',bd:'#0F6E5666',fg:'#0F6E56'};
+  if (v===0) return {bg:dark?'rgba(163,45,45,0.3)':'rgba(163,45,45,0.15)',bd:'#A32D2D66',fg:'#A32D2D'};
+  return {bg:dark?'rgba(180,150,0,0.2)':'rgba(180,150,0,0.1)',bd:'#BA751766',fg:'#BA7517'};
+}
+function pc(w) {
+  const hi=w>0.8,lo=w<0.2;
+  return {
+    bg:hi?(dark?'rgba(15,110,86,0.3)':'rgba(15,110,86,0.15)'):lo?(dark?'rgba(163,45,45,0.3)':'rgba(163,45,45,0.15)'):(dark?'rgba(180,150,0,0.2)':'rgba(180,150,0,0.1)'),
+    bd:hi?'#0F6E5666':lo?'#A32D2D66':'#BA751766',
+    fg:hi?'#0F6E56':lo?'#A32D2D':'#BA7517',
+    txt:w.toFixed(2)
+  };
+}
+
+function tabMatrix(){
+  const W=36,H=28;
+  let html=`<div class="row-wrap"><div class="row-lbl"></div>`;
+  ['Ann0\nExpert','Ann1\nGood','Ann2\nMed.','Ann3\nPoor','MV','STAPLE\nW','Truth'].forEach(l=>{
+    html+=`<div class="col-lbl" style="width:${W}px;font-size:9px;white-space:pre;">${l}</div>`;
+  });
+  html+='</div>';
+  for(let i=0;i<NI;i++){
+    html+=`<div class="row-wrap"><div class="row-lbl">item ${i}</div>`;
+    for(let j=0;j<NJ;j++){
+      const{bg,bd,fg}=cs(ANNS[j][i]);
+      html+=`<div class="cell" style="width:${W}px;height:${H}px;background:${bg};border-color:${bd};color:${fg};">${ANNS[j][i]}</div>`;
+    }
+    const mv=MV[i];
+    const{bg:mb,bd:mbd,fg:mf}=mv===-1?{bg:'transparent',bd:dark?'#333':'#ccc',fg:dark?'#555':'#bbb'}:cs(mv);
+    html+=`<div class="cell" style="width:${W}px;height:${H}px;background:${mb};border-color:${mbd};color:${mf};">${mv===-1?'tie':mv}</div>`;
+    const pw=pc(RES.W[i]);
+    html+=`<div class="cell" style="width:${W}px;height:${H}px;background:${pw.bg};border-color:${pw.bd};color:${pw.fg};">${pw.txt}</div>`;
+    const{bg:tb,bd:tbd,fg:tf}=cs(TRUTH[i]);
+    html+=`<div class="cell" style="width:${W}px;height:${H}px;background:${tb};border-color:${tbd};color:${tf};opacity:0.45;">${TRUTH[i]}</div>`;
+    html+='</div>';
+  }
+  html+=`<div class="ins" style="margin-top:8px;"><strong>Item 3:</strong> Expert=1, Good=0, Mediocre=0, Poor=0. Majority vote = 0 (wrong — truth=1). STAPLE W=${RES.W[3].toFixed(2)} (correct) because it has discovered the Expert is highly reliable — one expert vote outweighs three poor annotator votes. Truth column (faded) is shown here only for validation; STAPLE never sees it.</div>`;
+  return html;
+}
+
+function tabQuality(){
+  let html=`<div style="font-size:11px;color:var(--muted);margin-bottom:12px;">STAPLE-estimated sensitivity and specificity per annotator. Recovered from annotation patterns alone — no ground truth used.</div>`;
+  html+=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;flex-wrap:wrap;">`;
+  ['Sensitivity p  (P(say 1 | truth=1))','Specificity q  (P(say 0 | truth=0))'].forEach((title,ti)=>{
+    html+=`<div><div style="font-size:11px;font-weight:500;color:var(--text);margin-bottom:8px;font-family:var(--mono);">${title}</div>`;
+    ANN_NAMES.forEach((name,j)=>{
+      const est=(ti===0?RES.p:RES.q)[j];
+      const c=ANN_COLORS[j];
+      html+=`<div class="qual-row">
+        <div class="qual-name" style="color:${c};font-family:var(--mono);font-size:11px;">${name}</div>
+        <div class="qual-bar-bg">
+          <div class="qual-bar-fill" style="width:${Math.round(est*100)}%;background:${c};"></div>
+        </div>
+        <div class="qual-val">${est.toFixed(3)}</div>
+      </div>`;
+    });
+    html+=`</div>`;
+  });
+  html+=`</div>`;
+  html+=`<div class="ins" style="margin-top:12px;">STAPLE automatically discovers that the Expert (p≈${RES.p[0].toFixed(2)}, q≈${RES.q[0].toFixed(2)}) is far more reliable than the Poor annotator (p≈${RES.p[3].toFixed(2)}, q≈${RES.q[3].toFixed(2)}). The poor annotator's p≈0.5 means their positive labels are barely informative — similar to a coin flip.</div>`;
+  return html;
+}
+
+function tabCompare(){
+  const mvLbl=MV.map(v=>v===-1?'tie':String(v));
+  const stLbl=RES.W.map(w=>w>0.5?'1':'0');
+  const mvOk=MV.map((v,i)=>v===-1?null:v===TRUTH[i]);
+  const stOk=RES.W.map((w,i)=>(w>0.5?1:0)===TRUTH[i]);
+  const mvAcc=mvOk.filter(v=>v===true).length/NI;
+  const stAcc=stOk.filter(Boolean).length/NI;
+
+  let html=`<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+    <div style="flex:1;min-width:120px;background:var(--bg3);border:0.5px solid var(--border);border-radius:var(--radius);padding:10px 14px;text-align:center;">
+      <div style="font-size:11px;color:var(--muted);">Majority vote</div>
+      <div style="font-size:26px;font-weight:500;font-family:var(--mono);color:#A32D2D;">${(mvAcc*100).toFixed(0)}%</div>
+    </div>
+    <div style="flex:1;min-width:120px;background:rgba(15,110,86,0.09);border:0.5px solid #0F6E5688;border-radius:var(--radius);padding:10px 14px;text-align:center;">
+      <div style="font-size:11px;color:var(--muted);">STAPLE</div>
+      <div style="font-size:26px;font-weight:500;font-family:var(--mono);color:#0F6E56;">${(stAcc*100).toFixed(0)}%</div>
+    </div>
+  </div>`;
+
+  html+=`<div class="row-wrap"><div class="row-lbl"></div>`;
+  ['MV','STAPLE','Truth','MV ✓?','St ✓?'].forEach(l=>{
+    html+=`<div class="col-lbl" style="width:48px;font-size:9px;">${l}</div>`;
+  });
+  html+='</div>';
+  for(let i=0;i<NI;i++){
+    html+=`<div class="row-wrap"><div class="row-lbl">item ${i}</div>`;
+    const mv=MV[i],{bg:mb,bd:mbd,fg:mf}=mv===-1?{bg:'transparent',bd:dark?'#333':'#ccc',fg:dark?'#555':'#bbb'}:cs(mv);
+    html+=`<div class="cell" style="width:48px;height:28px;background:${mb};border-color:${mbd};color:${mf};">${mv===-1?'tie':mv}</div>`;
+    const pw=pc(RES.W[i]);
+    html+=`<div class="cell" style="width:48px;height:28px;background:${pw.bg};border-color:${pw.bd};color:${pw.fg};">${stLbl[i]}</div>`;
+    const{bg:tb,bd:tbd,fg:tf}=cs(TRUTH[i]);
+    html+=`<div class="cell" style="width:48px;height:28px;background:${tb};border-color:${tbd};color:${tf};opacity:0.5;">${TRUTH[i]}</div>`;
+    const mk=mvOk[i];
+    html+=`<div class="cell" style="width:48px;height:28px;background:${mk===null?'transparent':mk?'rgba(15,110,86,0.2)':'rgba(163,45,45,0.2)'};border-color:${mk===null?'transparent':mk?'#0F6E5666':'#A32D2D66'};color:${mk===null?dark?'#555':'#bbb':mk?'#0F6E56':'#A32D2D'};">${mk===null?'—':mk?'✓':'✗'}</div>`;
+    const sk=stOk[i];
+    html+=`<div class="cell" style="width:48px;height:28px;background:${sk?'rgba(15,110,86,0.2)':'rgba(163,45,45,0.2)'};border-color:${sk?'#0F6E5666':'#A32D2D66'};color:${sk?'#0F6E56':'#A32D2D'};">${sk?'✓':'✗'}</div>`;
+    html+='</div>';
+  }
+  html+=`<div class="ins" style="margin-top:8px;">STAPLE outperforms majority vote by down-weighting low-quality annotators. On item 3 (the key failure case), STAPLE correctly labels it positive even though 3 of 4 annotators said 0 — because those 3 have low estimated reliability.</div>`;
+  return html;
+}
+
+const STAPLE_TABS=[
+  {label:'Annotation matrix', fn:tabMatrix},
+  {label:'Annotator quality', fn:tabQuality},
+  {label:'STAPLE vs majority vote', fn:tabCompare},
+];
+let sCur=0;
+const stEl=document.getElementById('staple-tabs');
+STAPLE_TABS.forEach((t,i)=>{
+  const el=document.createElement('div'); el.className='tab'+(i===0?' on':''); el.textContent=t.label;
+  el.onclick=()=>{ sCur=i; document.querySelectorAll('#staple-tabs .tab').forEach((x,j)=>x.classList.toggle('on',j===i)); document.getElementById('staple-panel').innerHTML=t.fn(); };
+  stEl.appendChild(el);
+});
+document.getElementById('staple-panel').innerHTML=STAPLE_TABS[0].fn();
+
+// ─── EM CONVERGENCE CHARTS ───────────────────────────────────────────────────
+
+function drawConvChart(canvasId, histKey) {
+  const cv = document.getElementById(canvasId);
+  const W = 420, H = 180, PAD = 32;
+  cv.width=W; cv.height=H;
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0,0,W,H);
+  const iters = RES.hist.length;
+  const toC = (i,v) => [PAD+i/(iters-1)*(W-2*PAD), H-PAD-(v-0)/(1-0)*(H-2*PAD)];
+  const gc=dark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)';
+  ctx.strokeStyle=gc;ctx.lineWidth=0.5;
+  [0.25,0.5,0.75,1.0].forEach(t=>{
+    const y=PAD+(1-t)*(H-2*PAD);
+    ctx.beginPath();ctx.moveTo(PAD,y);ctx.lineTo(W-PAD,y);ctx.stroke();
+    ctx.fillStyle=dark?'rgba(255,255,255,0.3)':'rgba(0,0,0,0.3)';
+    ctx.font='9px monospace';ctx.textAlign='right';ctx.fillText(t.toFixed(2),PAD-3,y+3);
+  });
+  ANN_NAMES.forEach((name,j)=>{
+    const data=RES.hist.map(h=>h[histKey][j]);
+    ctx.strokeStyle=ANN_COLORS[j];ctx.lineWidth=2;ctx.beginPath();
+    data.forEach((v,i)=>{ const[x,y]=toC(i,v); i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); });
+    ctx.stroke();
+    const[lx,ly]=toC(iters-1,data[iters-1]);
+    ctx.fillStyle=ANN_COLORS[j];ctx.font='9px monospace';ctx.textAlign='left';
+    ctx.fillText(name,lx+3,ly+3);
+  });
+  ctx.fillStyle=dark?'rgba(255,255,255,0.3)':'rgba(0,0,0,0.3)';
+  ctx.font='9px monospace';ctx.textAlign='center';ctx.fillText('EM iteration →',W/2,H-2);
+}
+
+drawConvChart('cv-p','p');
+drawConvChart('cv-q','q');
+
+const legEl=document.getElementById('em-legend');
+ANN_NAMES.forEach((name,j)=>{
+  const d=document.createElement('div');d.style.cssText='display:flex;align-items:center;gap:6px;font-size:11px;';
+  d.innerHTML=`<div style="width:20px;height:2.5px;background:${ANN_COLORS[j]};border-radius:2px;"></div><span style="color:${ANN_COLORS[j]};font-weight:500;">${name}</span>`;
+  legEl.appendChild(d);
+});
+</script>
+</body>
+</html>
